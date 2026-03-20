@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NMR Diffusion Analysis</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Plotly -->
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+    <style>
+        .dropzone {
+            border: 2px dashed #cbd5e1;
+            transition: border-color 0.3s ease;
+        }
+        .dropzone.dragover {
+            border-color: #3b82f6;
+            background-color: #eff6ff;
+        }
+    </style>
+</head>
+<body class="bg-gray-50 min-h-screen text-gray-800 p-8">
+    <div class="max-w-5xl mx-auto bg-white p-6 rounded-lg shadow-md">
+        <h1 class="text-3xl font-bold mb-6 text-center text-blue-600">NMR Diffusion Analysis</h1>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+            <!-- Standard Dataset Upload -->
+            <div>
+                <h2 class="text-xl font-semibold mb-2">Standard Dataset</h2>
+                <div id="dropzone-standard" class="dropzone p-8 rounded-lg text-center cursor-pointer">
+                    <p class="text-gray-500 mb-2">Drag & Drop zipped standard data here</p>
+                    <p class="text-sm text-gray-400">or click to select file</p>
+                    <input type="file" id="file-standard" class="hidden" accept=".zip">
+                </div>
+                <div id="status-standard" class="mt-2 text-sm text-blue-500 hidden">Uploading...</div>
+            </div>
+
+            <!-- Sample Dataset Upload -->
+            <div>
+                <h2 class="text-xl font-semibold mb-2">Sample Dataset</h2>
+                <div id="dropzone-sample" class="dropzone p-8 rounded-lg text-center cursor-pointer">
+                    <p class="text-gray-500 mb-2">Drag & Drop zipped sample data here</p>
+                    <p class="text-sm text-gray-400">or click to select file</p>
+                    <input type="file" id="file-sample" class="hidden" accept=".zip">
+                </div>
+                <div id="status-sample" class="mt-2 text-sm text-blue-500 hidden">Uploading...</div>
+            </div>
+        </div>
+
+        <!-- Options -->
+        <div class="mb-8 p-4 bg-gray-50 rounded-lg border border-gray-200">
+            <h3 class="text-lg font-semibold mb-3">Analysis Options</h3>
+            <div class="flex items-center gap-4">
+                <label for="nucleus" class="font-medium text-gray-700">Nucleus:</label>
+                <select id="nucleus" class="border border-gray-300 rounded p-2">
+                    <option value="1H">1H</option>
+                    <option value="19F">19F</option>
+                    <option value="13C">13C</option>
+                    <option value="31P">31P</option>
+                </select>
+            </div>
+        </div>
+
+        <!-- Plot Area -->
+        <div class="mb-8">
+            <h2 class="text-2xl font-bold mb-4">Stacked Plot</h2>
+            <div id="plot-container" class="w-full h-[600px] border border-gray-200 rounded-lg bg-gray-50 flex items-center justify-center">
+                <span class="text-gray-400">Upload data to view plot</span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function setupDropzone(dropzoneId, fileInputId, statusId, datasetType) {
+            const dropzone = document.getElementById(dropzoneId);
+            const fileInput = document.getElementById(fileInputId);
+            const status = document.getElementById(statusId);
+
+            dropzone.addEventListener('click', () => fileInput.click());
+
+            dropzone.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                dropzone.classList.add('dragover');
+            });
+
+            dropzone.addEventListener('dragleave', () => {
+                dropzone.classList.remove('dragover');
+            });
+
+            dropzone.addEventListener('drop', (e) => {
+                e.preventDefault();
+                dropzone.classList.remove('dragover');
+                if (e.dataTransfer.files.length) {
+                    handleFile(e.dataTransfer.files[0], status, datasetType);
+                }
+            });
+
+            fileInput.addEventListener('change', (e) => {
+                if (e.target.files.length) {
+                    handleFile(e.target.files[0], status, datasetType);
+                }
+            });
+        }
+
+        function handleFile(file, statusEl, datasetType) {
+            if (!file.name.endsWith('.zip')) {
+                alert('Please upload a .zip file.');
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('type', datasetType);
+
+            statusEl.classList.remove('hidden');
+            statusEl.textContent = 'Uploading and processing...';
+
+            fetch('/upload', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    statusEl.textContent = 'Error: ' + data.error;
+                    statusEl.classList.add('text-red-500');
+                    statusEl.classList.remove('text-blue-500');
+                } else {
+                    statusEl.textContent = 'Processed successfully!';
+                    statusEl.classList.add('text-green-500');
+                    statusEl.classList.remove('text-blue-500');
+
+                    if (data.plot_data) {
+                        const plotContainer = document.getElementById('plot-container');
+                        plotContainer.innerHTML = ''; // Clear "upload to view" text
+                        Plotly.newPlot('plot-container', data.plot_data.data, data.plot_data.layout);
+                    }
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                statusEl.textContent = 'An error occurred during upload.';
+                statusEl.classList.add('text-red-500');
+                statusEl.classList.remove('text-blue-500');
+            });
+        }
+
+        setupDropzone('dropzone-standard', 'file-standard', 'status-standard', 'standard');
+        setupDropzone('dropzone-sample', 'file-sample', 'status-sample', 'sample');
+    </script>
+</body>
+</html>
