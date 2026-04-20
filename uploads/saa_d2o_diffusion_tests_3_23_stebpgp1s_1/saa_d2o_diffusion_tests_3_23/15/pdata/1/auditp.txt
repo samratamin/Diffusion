@@ -1,0 +1,46 @@
+##TITLE= Audit trail, TopSpin 4.4.1
+##JCAMPDX= 5.01
+##ORIGIN= Bruker BioSpin GmbH & Co. KG
+##OWNER= nmr
+$$ C:\Spintropy\Data\1774347680.52/SAA_D2O_Diffusion_Tests_3_23/15/pdata/1/auditp.txt
+##AUDIT TRAIL=  $$ (NUMBER, WHEN, WHO, WHERE, PROCESS, VERSION, WHAT)
+(   1,<2026-03-24T09:42:44.534+0000>,<CZC84177NN\nmr>,<CZC84177NN>,<go4>,<TopSpin 4.4.1>,
+      <acquisition in progress>)
+$$ D:/AutomationData/data/nmr/nmr/SAA_D2O_Diffusion_Tests_3_23/15/audita.txt
+(   2,<2026-03-24T10:22:28.976+0000>,<CZC84177NN\nmr>,<CZC84177NN>,<go4>,<TopSpin 4.4.1>,
+      <created by zg on 'Avance NEO 500' (CZC84177NN) by user 'CZC84177NN\nmr'
+       on data set with UUID 'cee1ecec-2765-11f1-833a-00139526ad74'
+       started at 2026-03-24 09:42:44.534 +0000, POWCHK enabled, PULCHK disabled,
+       completed at 2026-03-24 10:22:28.975 +0000
+       configuration hash MD5:
+       D0 C3 F2 F4 8F 11 28 48 35 CA 6C A4 01 3F 92 ED
+       double data hash MD5: 117646 * 16
+       B7 BA 4C B7 12 AA E9 B0 FC 4E A8 2A C9 02 34 D3>)
+(   3,<2026-03-24T03:21:19.150-0700>,<nmr>,<CZC84177NN>,<AU:sertoint>,<TopSpin 4.4.1>,
+      <sertoint
+       data hash MD5: 117646 * 16
+       12 89 A2 F5 7B D7 6C E1 51 D5 5A 6F FD 99 BE 3D>)
+(   4,<2026-03-24T03:21:19.219-0700>,<nmr>,<CZC84177NN>,<xwish3>,<TopSpin 4.4.1>,
+      <ICON-NMR User ID: nmr
+       data hash MD5: 117646 * 16
+       12 89 A2 F5 7B D7 6C E1 51 D5 5A 6F FD 99 BE 3D>)
+(   5,<2026-03-24T03:21:20.311-0700>,<nmr>,<CZC84177NN>,<proc2d>,<TopSpin 4.4.1>,
+      <Start of raw data processing
+       xfb same F2: SI = 128K WDW = 1 LB = 2 FT_mod = 6 PKNL = 1 PHC0 = 147.775 PHC1 = 0 F1: SI = 16 WDW = 3 SSB = 0 FT_mod = 6 FCOR = 0.5 PHC0 = 0 PHC1 = 0
+       fid data hash MD5: 117646 * 16
+       12 89 A2 F5 7B D7 6C E1 51 D5 5A 6F FD 99 BE 3D
+       data hash MD5: 128K * 16
+       2D 74 3E F2 AD 9C BD 7C 01 C6 8A D4 0D 59 46 A0>)
+$$ D:/AutomationData/data/nmr/nmr/SAA_D2O_Diffusion_Tests_3_23/15/pdata/1/auditp.txt
+(   6,<2026-03-24T03:21:20.428-0700>,<nmr>,<CZC84177NN>,<proc2d>,<TopSpin 4.4.1>,
+      <mc2 F2: PH_mod = 2
+       data hash MD5: 128K * 16
+       14 B3 59 2F 42 45 73 22 E9 6C 83 79 E7 76 26 59>)
+(   7,<2026-03-24T03:21:20.617-0700>,<nmr>,<CZC84177NN>,<dirdata>,<TopSpin 4.4.1>,
+      <wrpa from 1 15 "SAA_D2O_Diffusion_Tests_3_23" "D:/AutomationData/data/nmr/nmr"
+       data hash MD5: 128K * 16
+       14 B3 59 2F 42 45 73 22 E9 6C 83 79 E7 76 26 59>)
+##END=
+
+$$ hash MD5
+$$ 40 22 2B F3 7C 8B 21 12 41 5A 1D E6 86 9C 31 9D

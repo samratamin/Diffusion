@@ -6,6 +6,44 @@ import nmrglue as ng
 import plotly.graph_objects as go
 import numpy as np
 import json
+import sqlite3
+
+# SQLite Configuration
+DB_FILE = 'nmr_diffusion.db'
+
+def init_db():
+    try:
+        # Create database and table if not exist
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS standards (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT UNIQUE NOT NULL,
+                diffusion_constant REAL NOT NULL,
+                unit TEXT DEFAULT 'm^2/s'
+            )
+        """)
+        
+        # Default standards data:
+        # D2O: 1.9e-9 m^2/s
+        # Glycerol: 2.2e-12 m^2/s (approx at RT)
+        # Squalane: 3.1e-11 m^2/s (approx at RT)
+        defaults = [
+            ("D2O", 1.9e-9),
+            ("Glycerol", 2.2e-12),
+            ("Squalane", 3.1e-11)
+        ]
+        
+        for name, d_const in defaults:
+            cursor.execute("INSERT OR IGNORE INTO standards (name, diffusion_constant) VALUES (?, ?)", (name, d_const))
+            
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"Warning: Could not initialize database: {e}")
+
+init_db()
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = 'uploads'
@@ -36,9 +74,20 @@ def upload_file():
 
         # Try to process the data
         try:
+            # Check for standard type if provided
+            standard_type = request.form.get('standard_type')
+            
             plot_data = process_nmr_data(extract_dir)
+            
+            # If it's a standard, maybe fetch its known D from DB for future use
+            if standard_type:
+                # Store standard name in the response for frontend tracking
+                plot_data['standard_name'] = standard_type
+            
             return jsonify({'message': 'File successfully uploaded and extracted', 'plot_data': plot_data})
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             return jsonify({'error': f'Failed to process NMR data: {str(e)}'}), 500
 
     return jsonify({'error': 'Invalid file type. Please upload a .zip file'}), 400
@@ -61,50 +110,77 @@ def process_nmr_data(extract_dir):
         raise ValueError("Could not detect Bruker or Varian data structure in the uploaded zip.")
 
     if vendor == 'bruker':
+        # Read the raw Bruker data
         dic, data = ng.bruker.read(data_path)
-        # Remove digital filter if necessary (depends on Bruker format, safe to try)
-        if dic.get('acqus') and dic['acqus'].get('GRPDLY'):
-            data = ng.bruker.remove_digital_filter(dic, data)
+        
+        # Determine the shape and format. 
+        # Bruker pseudo-2D data can be (N_gradients, N_points) where N_points includes 
+        # interleaved real/imaginary, or it can be (N_gradients, N_complex_points).
+        # nmrglue's remove_digital_filter should be applied to the raw data once.
+        data = ng.bruker.remove_digital_filter(dic, data)
+        
+        # If after digital filtering the data is not complex, and the first dimension
+        # is even, we likely have interleaved Real/Imaginary FIDs.
+        if not np.iscomplexobj(data) and len(data.shape) == 2:
+            # Reconstruct complex: [R1, I1, R2, I2, ...] -> [R1+jI1, R2+jI2, ...]
+            # This handles the 32-slice vs 16-slice issue correctly.
+            data = data[::2] + 1j * data[1::2]
+            
     elif vendor == 'varian':
         dic, data = ng.varian.read(data_path)
 
-    # Process pseudo-2D
-    # It might be 1D if it's not a diffusion set, but diffusion sets are pseudo-2D
+    # Convert to complex if still not complex
+    if not np.iscomplexobj(data):
+        data = data.astype(complex)
+
+    # data should now be (N_gradients, N_points)
     if len(data.shape) == 1:
-        # Just a single 1D spec
         slices = [data]
     else:
-        # Take the slices (gradients)
         slices = [data[i] for i in range(data.shape[0])]
 
-    traces = []
-
-    # Simple processing for visualization: FT and phase (auto-phase is hard, just FT for now)
-    # Just show absolute value spectrum for basic visualization
+    # Calculate magnitude spectra for all slices
+    processed_spectra = []
     for i, trace in enumerate(slices):
-        # basic FT
-        sp = np.fft.fftshift(np.fft.fft(trace))
-        # use magnitude spectrum for robust initial visualization
-        sp_mag = np.abs(sp)
+        # 1. Stronger windowing (Exponential, lb=15) to isolate the peak
+        window = np.exp(-15 * np.arange(len(trace)) / len(trace))
+        trace_win = trace * window
 
-        # Real data tends to be huge, let's decimate or just plot as is if small enough
-        x_axis = np.arange(len(sp_mag))
+        # 2. FT with 4x Zero-filling
+        n_fft = len(trace) * 4
+        sp = np.fft.fftshift(np.fft.fft(trace_win, n_fft))
+        processed_spectra.append(np.abs(sp))
 
-        # Offset each slice on the y-axis to create a stacked/waterfall effect
-        offset = i * (np.max(sp_mag) * 0.1) if i > 0 and len(slices) > 1 else 0
+    # Normalize to the maximum of the FIRST gradient slice
+    norm_factor = np.max(processed_spectra[0]) if len(processed_spectra) > 0 and np.max(processed_spectra[0]) > 0 else 1.0
+
+    traces = []
+    # Create a consistent ppm base scale
+    ppm_base = np.linspace(15, -5, len(processed_spectra[0]))
+
+    for i, sp_mag in enumerate(processed_spectra):
+        sp_norm = sp_mag / norm_factor
+        
+        # Vertical offset for stacking
+        y_offset = i * 0.05
+        
+        # Horizontal shift (ppm) to create a staggered waterfall effect
+        # Shifting to the right (lower ppm) by 0.1 ppm per slice
+        x_shift = i * 0.1
+        x_ppm_staggered = (ppm_base - x_shift).tolist()
 
         traces.append({
-            'x': x_axis.tolist(),
-            'y': (sp_mag + offset).tolist(),
+            'x': x_ppm_staggered,
+            'y': (sp_norm + y_offset).tolist(),
             'type': 'scatter',
             'mode': 'lines',
             'name': f'Gradient {i+1}'
         })
 
     layout = {
-        'title': 'NMR Diffusion Data (Pseudo-2D Stacked Plot)',
-        'xaxis': {'title': 'Points', 'autorange': 'reversed'},  # NMR data often plotted reversed
-        'yaxis': {'title': 'Intensity (Offset)', 'showticklabels': False},
+        'title': f'NMR {vendor.capitalize()} Diffusion Data (Pseudo-2D Stacked Plot)',
+        'xaxis': {'title': 'Chemical Shift (ppm)', 'autorange': 'reversed'},
+        'yaxis': {'title': 'Normalized Intensity', 'showticklabels': False},
         'showlegend': True,
         'margin': {'l': 50, 'r': 50, 't': 50, 'b': 50}
     }

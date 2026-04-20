@@ -1,0 +1,34 @@
+##TITLE= Audit trail, TopSpin 4.4.1
+##JCAMPDX= 5.01
+##ORIGIN= Bruker BioSpin GmbH & Co. KG
+##OWNER= nmr
+$$ C:\Spintropy\Data\1763114826.97/D20_Diffusion_test/15/audita.txt
+##AUDIT TRAIL=  $$ (NUMBER, WHEN, WHO, WHERE, PROCESS, VERSION, WHAT)
+(   1,<2025-11-14T09:28:58.471+0000>,<CZC84177NN\nmr>,<CZC84177NN>,<go4>,<TopSpin 4.4.1>,
+      <acquisition in progress>)
+$$ D:/AutomationData/data/nmr/nmr/D20_Diffusion_test/15/audita.txt
+(   2,<2025-11-14T10:08:44.096+0000>,<CZC84177NN\nmr>,<CZC84177NN>,<go4>,<TopSpin 4.4.1>,
+      <created by zg on 'Avance NEO 500' (CZC84177NN) by user 'CZC84177NN\nmr'
+       on data set with UUID '58d84cb0-c13c-11f0-a8b2-00139526ad74'
+       started at 2025-11-14 09:28:58.470 +0000, POWCHK enabled, PULCHK disabled,
+       completed at 2025-11-14 10:08:44.095 +0000
+       configuration hash MD5:
+       1A D6 EB 6A 0D D0 38 16 34 1E FF 65 72 C7 F4 DE
+       double data hash MD5: 117646 * 16
+       26 68 08 21 8C 5D B0 D4 68 26 D1 95 BA 09 21 D5>)
+(   3,<2025-11-14T03:07:05.403-0700>,<nmr>,<CZC84177NN>,<AU:sertoint>,<TopSpin 4.4.1>,
+      <sertoint
+       data hash MD5: 117646 * 16
+       E8 EC 45 A5 DE A8 D1 E5 CD 77 D4 77 C4 39 B5 AC>)
+(   4,<2025-11-14T03:07:05.488-0700>,<nmr>,<CZC84177NN>,<xwish3>,<TopSpin 4.4.1>,
+      <ICON-NMR User ID: nmr
+       data hash MD5: 117646 * 16
+       E8 EC 45 A5 DE A8 D1 E5 CD 77 D4 77 C4 39 B5 AC>)
+(   5,<2025-11-14T03:07:07.146-0700>,<nmr>,<CZC84177NN>,<dirdata>,<TopSpin 4.4.1>,
+      <wrpa from 1 15 "D20_Diffusion_test" "D:/AutomationData/data/nmr/nmr"
+       data hash MD5: 117646 * 16
+       E8 EC 45 A5 DE A8 D1 E5 CD 77 D4 77 C4 39 B5 AC>)
+##END=
+
+$$ hash MD5
+$$ B5 04 9D BA 51 D1 7E C7 FB 7B A8 2F E0 71 9E 98

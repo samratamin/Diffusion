@@ -1,0 +1,24 @@
+##TITLE= Parameter file, TopSpin 4.4.1
+##JCAMPDX= 5.0
+##DATATYPE= Parameter Values
+##NPOINTS= 1	$$ modification sequence number
+##ORIGIN= Bruker BioSpin GmbH & Co. KG
+##OWNER= nmr
+$$ 2026-03-25 14:08:09.863 -0700  nmr@CZC84177NN
+$$ C:\Spintropy\Data\1774472889.83/SAA_D2O_Diffusion_Tests_3_23/13/acqu2
+$$ process C:\Bruker\TopSpin4.4.1\prog\mod\dirdata.exe
+##$ACQT0= 0
+##$BF1= 500.15
+##$FnILOOP= 0
+##$FnMODE= 1
+##$NUC1= <1H>
+##$NusJSP= 0
+##$NusT2= 1
+##$NusTD= 0
+##$O1= 3088.426
+##$ProjAngle= 0
+##$SFO1= 500.153088426
+##$SW= 9.99695391404668
+##$SW_h= 5000.00737496284
+##$TD= 16
+##END=

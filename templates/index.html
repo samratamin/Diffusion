@@ -27,11 +27,24 @@
             <!-- Standard Dataset Upload -->
             <div>
                 <h2 class="text-xl font-semibold mb-2">Standard Dataset</h2>
-                <div id="dropzone-standard" class="dropzone p-8 rounded-lg text-center cursor-pointer">
+                <div id="dropzone-standard" class="dropzone p-8 rounded-lg text-center cursor-pointer mb-4">
                     <p class="text-gray-500 mb-2">Drag & Drop zipped standard data here</p>
                     <p class="text-sm text-gray-400">or click to select file</p>
                     <input type="file" id="file-standard" class="hidden" accept=".zip">
                 </div>
+                
+                <!-- Standard Selection -->
+                <div class="mb-4">
+                    <label for="standard-select" class="block text-sm font-medium text-gray-700 mb-1">Standard Type:</label>
+                    <select id="standard-select" class="w-full border border-gray-300 rounded p-2 bg-white">
+                        <option value="">-- Auto-detect or Select --</option>
+                        <option value="D2O">D2O (1.9e-9 m²/s)</option>
+                        <option value="Glycerol">Glycerol (2.2e-12 m²/s)</option>
+                        <option value="Squalane">Squalane (3.1e-11 m²/s)</option>
+                    </select>
+                    <p id="standard-detection-info" class="text-xs text-blue-600 mt-1 hidden"></p>
+                </div>
+
                 <div id="status-standard" class="mt-2 text-sm text-blue-500 hidden">Uploading...</div>
             </div>
 
@@ -108,9 +121,39 @@
                 return;
             }
 
+            // Auto-detection logic for standards
+            if (datasetType === 'standard') {
+                const standardSelect = document.getElementById('standard-select');
+                const infoEl = document.getElementById('standard-detection-info');
+                const lowerName = file.name.toLowerCase();
+                
+                let detected = "";
+                if (lowerName.includes('d2o')) detected = "D2O";
+                else if (lowerName.includes('glycerol')) detected = "Glycerol";
+                else if (lowerName.includes('squalane')) detected = "Squalane";
+
+                if (detected) {
+                    standardSelect.value = detected;
+                    infoEl.textContent = "Automatically detected standard: " + detected;
+                    infoEl.classList.remove('hidden');
+                } else {
+                    infoEl.classList.add('hidden');
+                    // If no match found and user hasn't selected anything, warn them
+                    if (!standardSelect.value) {
+                        alert("Standard type not detected from filename. Please select one manually.");
+                        return;
+                    }
+                }
+            }
+
             const formData = new FormData();
             formData.append('file', file);
             formData.append('type', datasetType);
+            
+            // Collect standard type if relevant
+            if (datasetType === 'standard') {
+                formData.append('standard_type', document.getElementById('standard-select').value);
+            }
 
             statusEl.classList.remove('hidden');
             statusEl.textContent = 'Uploading and processing...';
