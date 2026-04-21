@@ -107,6 +107,10 @@ def analyze_diffusion():
         m = cal['fit_slope']
         c = cal['fit_intercept']
 
+        def lorentzian(x, amp, cen, wid, offset):
+            """Lorentzian lineshape for peak fitting"""
+            return (amp * wid**2 / ((x - cen)**2 + wid**2)) + offset
+
         results_list = []
         # Support both 'ppm' and 'ppm_full' keys if they differ in plot_data
         # Revised check: process_nmr_data returns 'raw_ppm'
@@ -157,22 +161,47 @@ def analyze_diffusion():
             idx = np.argmin(np.abs(full_ppm - target_ppm))
             
             intensities = []
+            peak_fit_models = [] # To store fit data for UI deconvolution visualization
+
             for slice_idx in range(len(raw_spectra)):
-                # Use raw_spectra instead of stacked_data['y'] (which has offsets)
                 slice_y = np.array(raw_spectra[slice_idx])
                 
                 if method == 'intensity':
-                    # Auto-find max in a small window (e.g. +/- 0.05 ppm)
-                    window = 15 # points
+                    window = 15 
                     start = max(0, idx - window)
                     end = min(len(slice_y), idx + window)
                     val = np.max(slice_y[start:end])
+                    peak_fit_models.append(None)
                 else:
-                    # Simple summation area for now (can be expanded to lorentzian fitting)
-                    window = 25
+                    # LORENTZIAN PEAK FITTING (DECONVOLUTION)
+                    window = 30 # Slightly larger for fitting
                     start = max(0, idx - window)
                     end = min(len(slice_y), idx + window)
-                    val = np.sum(slice_y[start:end])
+                    
+                    x_fit_vals = full_ppm[start:end]
+                    y_fit_vals = slice_y[start:end]
+                    
+                    # Initial guesses: [amplitude, center, width, offset]
+                    amp_guess = np.max(y_fit_vals)
+                    cen_guess = full_ppm[idx]
+                    wid_guess = 0.015 # Typical linewidth in ppm
+                    off_guess = np.min(y_fit_vals)
+                    
+                    try:
+                        popt, _ = curve_fit(lorentzian, x_fit_vals, y_fit_vals, 
+                                          p0=[amp_guess, cen_guess, wid_guess, off_guess],
+                                          bounds=([0, cen_guess-0.1, 0, -np.inf], [np.inf, cen_guess+0.1, 1.0, np.inf]))
+                        # Area of Lorentzian = pi * amplitude * width
+                        val = np.pi * popt[0] * popt[2]
+                        peak_fit_models.append({
+                            'x': x_fit_vals.tolist(),
+                            'y_fit': lorentzian(x_fit_vals, *popt).tolist(),
+                            'params': popt.tolist()
+                        })
+                    except:
+                        # Fallback to simple integration if fit fails
+                        val = np.sum(y_fit_vals)
+                        peak_fit_models.append(None)
                 
                 intensities.append(val)
             
@@ -239,7 +268,8 @@ def analyze_diffusion():
                 'gradients': gradients.tolist(),
                 'd_value': float(d_value),
                 'r_squared': float(r2),
-                'error_pct': float(error_pct)
+                'error_pct': float(error_pct),
+                'peak_fits': peak_fit_models # Include the deconvolution fits for verification
             })
 
         return jsonify({

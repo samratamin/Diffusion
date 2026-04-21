@@ -712,12 +712,12 @@
                 x: ppm,
                 y: spec,
                 mode: 'lines',
-                line: { color: '#3b82f6', width: 1.5 },
+                line: { color: '#3b82f6', width: 1.5, opacity: 0.5 },
                 name: 'Spectrum'
             }];
 
             // Markers for selected peaks (now also normalized)
-            selectedPeaks.forEach(p => {
+            selectedPeaks.forEach((p, peakIdx) => {
                 const targetPpm = parseFloat(p);
                 // Simple index lookup
                 let bestIdx = 0;
@@ -737,6 +737,25 @@
                     marker: { size: 10, color: 'red', symbol: 'circle' },
                     name: `${p} ppm`
                 });
+
+                // OVERLAY PEAK FITS (Deconvolution)
+                if (lastAnalysisResult && lastAnalysisResult.results[peakIdx] && lastAnalysisResult.results[peakIdx].peak_fits) {
+                    const fitData = lastAnalysisResult.results[peakIdx].peak_fits[currentSliceIndex];
+                    if (fitData) {
+                        // Normalize the fit Y values to the same MaxVal
+                        // We need the maxVal used in this function to keep scaling consistent
+                        // Note: fitData.y_fit are the raw fit intensities
+                        traces.push({
+                            x: fitData.x,
+                            y: fitData.y_fit.map(v => v / maxVal),
+                            mode: 'lines',
+                            line: { color: 'rgba(239, 68, 68, 0.8)', width: 2, dash: 'solid' },
+                            fill: 'tozeroy',
+                            fillcolor: 'rgba(239, 68, 68, 0.1)',
+                            name: `Fit ${p}`
+                        });
+                    }
+                }
             });
 
             const layout = {
@@ -1012,10 +1031,10 @@
             });
 
             Plotly.newPlot('analysis-decay-plot', plotData, {
-                title: 'Decay Fits for Selected Peaks',
+                title: 'Decay Fit: ' + (method === 'area' ? 'Peak Integral (Area)' : 'Peak Intensity (Height)'),
                 xaxis: { title: 'Gradient Strength (G/cm)', zeroline: false },
                 yaxis: { 
-                    title: 'Normalized Intensity (I/I₀)', 
+                    title: method === 'area' ? 'Normalized Area (A/A₀)' : 'Normalized Intensity (I/I₀)', 
                     zeroline: false,
                     exponentformat: 'e',
                     showexponent: 'all'
