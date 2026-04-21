@@ -78,6 +78,7 @@ def analyze_diffusion():
         method = data.get('method', 'intensity')
         calibration_id = data.get('calibration_id')
         plot_data = data.get('nmr_data', {})
+        omitted_slices = data.get('omitted_slices', [])
         
         # 1. Fetch Calibration from DB
         conn = sqlite3.connect(DB_FILE)
@@ -179,18 +180,24 @@ def analyze_diffusion():
             
             # Linear fit in log-space: ln(I/I0) = -D * ST_X
             # Normalization: I/I0
-            I0 = intensities[0] if intensities[0] > 0 else 1.0
-            norm_intensities = intensities / I0
+            # Apply Omissions
+            mask = np.ones(len(intensities), dtype=bool)
+            for oi in omitted_slices:
+                if 0 <= oi < len(mask):
+                    mask[oi] = False
             
             # Robust fitting: Only fit points where intensity is above noise floor (e.g. 2% of I0)
+            I0 = intensities[0] if intensities[0] > 0 else 1.0
+            norm_intensities_full = intensities / I0
             noise_floor = 0.02
-            valid = (norm_intensities > noise_floor)
+            valid = (norm_intensities_full > noise_floor) & mask
             
-            if np.sum(valid) < 3:
-                valid = np.zeros_like(norm_intensities, dtype=bool)
-                valid[:min(3, len(valid))] = True
+            if np.sum(valid) < 2:
+                # If everything omitted or too low, fall back to at least 2 points
+                valid = np.ones_like(norm_intensities_full, dtype=bool)
+                valid[len(valid)//2:] = False # heuristic
                 
-            log_i = np.log(norm_intensities[valid])
+            log_i = np.log(norm_intensities_full[valid])
             x_fit = st_x[valid]
             
             # ln(I/I0) = -D * ST_X + offset
@@ -223,7 +230,7 @@ def analyze_diffusion():
 
             results_list.append({
                 'ppm': float(target_ppm),
-                'intensities': norm_intensities.tolist(), 
+                'intensities': norm_intensities_full.tolist(), 
                 'fit_intensities': fit_intensities_at_points.tolist(),
                 'fit_line': {
                     'x': g_smooth.tolist(),
