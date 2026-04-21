@@ -213,6 +213,26 @@ def process_nmr_data(extract_dir):
         # For now, if missing, use 0-1 normalized version of difflist or indices
         difframp = (np.array(difflist) / max(difflist)).tolist()
 
+    # Detect Standard based on pulse program or folder name
+    detected_standard = None
+    if vendor == 'bruker':
+        pulse_program = dic.get('acqus', {}).get('PULPROG', '')
+        if not pulse_program and 'acqus' in dic:
+            # Sometimes PULPROG is a list or requires precise access
+            pulse_program = dic['acqus'].get('PULPROG', [''])[0]
+        pulse_program = str(pulse_program).lower()
+        
+        # In a real scenario, we'd check more metadata or the user might name their folder 'd2o_...'
+        folder_name = os.path.normpath(data_path).split(os.sep)
+        folder_search = " ".join(folder_name).lower()
+
+        if 'd2o' in folder_search or 'd2o' in pulse_program:
+            detected_standard = 'D2O'
+        elif 'glycerol' in folder_search or 'glyc' in pulse_program:
+            detected_standard = 'Glycerol'
+        elif 'squalane' in folder_search or 'squal' in pulse_program:
+            detected_standard = 'Squalane'
+
     # Calculate magnitude spectra for all slices
     processed_spectra = []
     for i, trace in enumerate(slices):
@@ -281,8 +301,22 @@ def process_nmr_data(extract_dir):
         'raw_spectra': [sp.tolist() for sp in processed_spectra],
         'difflist': difflist,
         'difframp': difframp,
-        'exp_params': params
+        'exp_params': params,
+        'detected_standard': detected_standard
     }
+
+@app.route('/get_calibrations', methods=['GET'])
+def get_calibrations():
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, name, timestamp, max_g_gauss, delta, big_delta, fit_slope, fit_intercept FROM calibrations ORDER BY timestamp DESC")
+    rows = cursor.fetchall()
+    conn.close()
+    return jsonify([{
+        'id': r[0], 'name': r[1], 'timestamp': r[2], 
+        'max_g': r[3], 'delta': r[4], 'big_delta': r[5],
+        'slope': r[6], 'intercept': r[7]
+    } for r in rows])
 
 @app.route('/get_standards', methods=['GET'])
 def get_standards():
