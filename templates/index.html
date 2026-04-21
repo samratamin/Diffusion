@@ -77,13 +77,69 @@
         <!-- Plot Area -->
         <div class="mb-8">
             <h2 class="text-2xl font-bold mb-4">Stacked Plot</h2>
-            <div id="plot-container" class="w-full h-[600px] border border-gray-200 rounded-lg bg-gray-50 flex items-center justify-center">
-                <span class="text-gray-400">Upload data to view plot</span>
+            <div id="plot-stacked" class="w-full h-[500px] border border-gray-200 rounded-lg bg-gray-50 flex items-center justify-center">
+                <span class="text-gray-400">Upload data to view stacked plot</span>
+            </div>
+        </div>
+
+        <!-- Selection Plot Area -->
+        <div id="selection-area" class="mb-8 hidden">
+            <h2 class="text-2xl font-bold mb-4">Peak Selection</h2>
+            <p class="text-sm text-gray-600 mb-2">Click near the maximum of the peak of interest in the first slice below.</p>
+            <div id="plot-selection" class="w-full h-[400px] border border-gray-200 rounded-lg bg-gray-50"></div>
+        </div>
+
+        <!-- Analysis Results -->
+        <div id="analysis-results" class="hidden">
+            <h2 class="text-2xl font-bold mb-4">Analysis Results</h2>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div>
+                    <div id="decay-plot" class="w-full h-[400px] border border-gray-200 rounded-lg bg-gray-50 mb-4"></div>
+                    <div id="linearity-plot" class="w-full h-[400px] border border-gray-200 rounded-lg bg-gray-50"></div>
+                </div>
+                <div class="p-4 bg-gray-50 rounded-lg border border-gray-200">
+                    <div class="flex justify-between items-center mb-3">
+                        <h3 class="text-lg font-semibold">Calculated Results</h3>
+                        <button id="btn-save-calib" class="bg-blue-600 text-white px-3 py-1 rounded text-sm hover:bg-blue-700">Save Calibration</button>
+                    </div>
+                    <div id="params-info" class="text-sm text-gray-600 mb-4 p-2 bg-blue-50 rounded border border-blue-100">
+                        <!-- Params will be injected here -->
+                    </div>
+                    <div id="gradient-results" class="overflow-x-auto h-[500px] overflow-y-auto">
+                        <table class="w-full text-sm text-left text-gray-500">
+                            <thead class="text-xs text-gray-700 uppercase bg-gray-100 sticky top-0">
+                                <tr>
+                                    <th class="px-4 py-2">Step</th>
+                                    <th class="px-4 py-2">Setting (%)</th>
+                                    <th class="px-4 py-2">DiffList (G/cm)</th>
+                                    <th class="px-4 py-2">Analysis (G/cm)</th>
+                                </tr>
+                            </thead>
+                            <tbody id="gradient-table-body">
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Save Modal -->
+    <div id="modal-save" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center hidden">
+        <div class="bg-white p-6 rounded-lg max-w-sm w-full">
+            <h3 class="text-xl font-bold mb-4">Save Calibration</h3>
+            <label class="block text-sm mb-1">Calibration Name:</label>
+            <input type="text" id="calib-name" class="w-full border p-2 rounded mb-4" placeholder="e.g. 1H-600-RoomTemp">
+            <div class="flex justify-end gap-2">
+                <button onclick="closeModal()" class="px-4 py-2 text-gray-600">Cancel</button>
+                <button onclick="confirmSave()" class="px-4 py-2 bg-blue-600 text-white rounded">Save</button>
             </div>
         </div>
     </div>
 
     <script>
+        let currentNmrData = null;
+
         function setupDropzone(dropzoneId, fileInputId, statusId, datasetType) {
             const dropzone = document.getElementById(dropzoneId);
             const fileInput = document.getElementById(fileInputId);
@@ -174,9 +230,27 @@
                     statusEl.classList.remove('text-blue-500');
 
                     if (data.plot_data) {
-                        const plotContainer = document.getElementById('plot-container');
-                        plotContainer.innerHTML = ''; // Clear "upload to view" text
-                        Plotly.newPlot('plot-container', data.plot_data.data, data.plot_data.layout);
+                        currentNmrData = data.plot_data;
+                        
+                        // Render stacked plot
+                        const plotStacked = document.getElementById('plot-stacked');
+                        plotStacked.innerHTML = '';
+                        Plotly.newPlot('plot-stacked', data.plot_data.stacked_data, data.plot_data.stacked_layout);
+
+                        // Render selection plot
+                        document.getElementById('selection-area').classList.remove('hidden');
+                        const plotSelection = document.getElementById('plot-selection');
+                        const selectionLayout = {
+                            title: 'Select Peak (Slice 1)',
+                            xaxis: { title: 'Chemical Shift (ppm)', autorange: 'reversed' },
+                            yaxis: { title: 'Normalized Intensity' },
+                            margin: { l: 50, r: 50, t: 50, b: 50 }
+                        };
+                        Plotly.newPlot('plot-selection', data.plot_data.selection_data, selectionLayout);
+
+                        plotSelection.on('plotly_click', function(clickData) {
+                            handlePeakClick(clickData);
+                        });
                     }
                 }
             })
@@ -185,6 +259,160 @@
                 statusEl.textContent = 'An error occurred during upload.';
                 statusEl.classList.add('text-red-500');
                 statusEl.classList.remove('text-blue-500');
+            });
+        }
+
+        function handlePeakClick(clickData) {
+            if (!currentNmrData) return;
+
+            const point = clickData.points[0];
+            const ppm = point.x; // Now we use the x coordinate directly from the selection plot
+            const standardType = document.getElementById('standard-select').value;
+
+            console.log("Clicked PPM:", ppm);
+
+            fetch('/analyze_peak', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    ppm: ppm,
+                    raw_ppm: currentNmrData.raw_ppm,
+                    raw_spectra: currentNmrData.raw_spectra,
+                    standard: standardType,
+                    difflist: currentNmrData.difflist,
+                    difframp: currentNmrData.difframp,
+                    exp_params: currentNmrData.exp_params
+                })
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.error) {
+                    alert(data.error);
+                } else {
+                    displayAnalysisResults(data);
+                }
+            });
+        }
+
+        let lastAnalysisResult = null;
+
+        function displayAnalysisResults(data) {
+            lastAnalysisResult = data;
+            document.getElementById('analysis-results').classList.remove('hidden');
+            
+            // Show experimental parameters
+            const paramsInfo = document.getElementById('params-info');
+            paramsInfo.innerHTML = `
+                <p><strong>Δ (Diffusion Time):</strong> ${(data.big_delta * 1000).toFixed(1)} ms</p>
+                <p><strong>δ (Gradient Pulse):</strong> ${(data.delta * 1000).toFixed(1)} ms</p>
+                <p><strong>Calibrated Max G:</strong> ${data.calibrated_max_g.toFixed(2)} G/cm</p>
+                <div class="mt-2 p-2 bg-white rounded border border-blue-200">
+                    <p class="text-xs font-semibold text-blue-900 mb-1">Linearity Model:</p>
+                    <p class="text-sm font-mono text-blue-800">
+                        G(s) = ${data.fit_slope.toFixed(2)} · s ${data.fit_intercept >= 0 ? '+ ' + data.fit_intercept.toFixed(2) : '- ' + Math.abs(data.fit_intercept).toFixed(2)}
+                    </p>
+                    <p class="text-[10px] text-gray-500 mt-1 italic">where G is strength in G/cm and s is setting fraction (0–1)</p>
+                </div>
+            `;
+
+            // 1. Plot intensity decay
+            const decayTrace = {
+                x: data.gradients, 
+                y: data.intensities,
+                mode: 'markers',
+                type: 'scatter',
+                name: 'Measured'
+            };
+
+            const fitTrace = {
+                x: data.gradients,
+                y: data.fit_intensities,
+                mode: 'lines',
+                type: 'scatter',
+                name: 'Fit',
+                line: { color: 'red' }
+            };
+
+            const layoutDecay = {
+                title: 'Stejskal-Tanner Fit',
+                xaxis: { title: 'Gradient Strength (Gauss/cm)' },
+                yaxis: { title: 'Intensity' },
+                margin: { l: 50, r: 50, t: 30, b: 50 }
+            };
+
+            Plotly.newPlot('decay-plot', [decayTrace, fitTrace], layoutDecay);
+
+            // 2. Plot linearity (Setting % vs Gauss/cm)
+            const linearityTrace = {
+                x: data.gradient_steps.map(r => r * 100),
+                y: data.gradients,
+                mode: 'markers+lines',
+                type: 'scatter',
+                marker: { color: 'green' }
+            };
+
+            const layoutLinearity = {
+                title: 'Gradient Linearity',
+                xaxis: { title: 'Gradient Setting (%)' },
+                yaxis: { title: 'Actual Strength (G/cm)' },
+                margin: { l: 50, r: 50, t: 30, b: 50 }
+            };
+
+            Plotly.newPlot('linearity-plot', [linearityTrace], layoutLinearity);
+
+            // Populate table
+            const tbody = document.getElementById('gradient-table-body');
+            tbody.innerHTML = '';
+            data.gradients.forEach((g, i) => {
+                const setting = (data.gradient_steps[i] * 100).toFixed(2);
+                const spectroValue = data.difflist && data.difflist[i] ? data.difflist[i].toFixed(4) : '-';
+                const row = `<tr>
+                    <td class="px-4 py-2 border-t">${i+1}</td>
+                    <td class="px-4 py-2 border-t">${setting}%</td>
+                    <td class="px-4 py-2 border-t">${spectroValue}</td>
+                    <td class="px-4 py-2 border-t">${g.toFixed(4)}</td>
+                </tr>`;
+                tbody.innerHTML += row;
+            });
+        }
+
+        document.getElementById('btn-save-calib').addEventListener('click', () => {
+            document.getElementById('modal-save').classList.remove('hidden');
+        });
+
+        function closeModal() {
+            document.getElementById('modal-save').classList.add('hidden');
+        }
+
+        function confirmSave() {
+            const name = document.getElementById('calib-name').value;
+            if (!name) { alert("Please enter a name"); return; }
+
+            if (!lastAnalysisResult) {
+                alert("No analysis result available to save.");
+                return;
+            }
+
+            fetch('/save_calibration', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    name: name,
+                    max_g: lastAnalysisResult.calibrated_max_g,
+                    delta: lastAnalysisResult.delta,
+                    big_delta: lastAnalysisResult.big_delta,
+                    slope: lastAnalysisResult.fit_slope,
+                    intercept: lastAnalysisResult.fit_intercept
+                })
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.error) {
+                    alert("Error saving: " + data.error);
+                } else {
+                    alert("Calibration saved successfully!");
+                    closeModal();
+                }
             });
         }
 
