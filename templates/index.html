@@ -164,51 +164,167 @@
             </div>
         </div>
 
-        <!-- Section 2: Analysis -->
-        <div id="section-analysis" class="tab-content">
-            <div class="p-6 bg-green-50 rounded-xl border border-green-100 mb-8">
-                <h2 class="text-2xl font-bold mb-4 text-green-800">Sample Analysis</h2>
+            <div id="section-analysis" class="tab-content">
+                <div class="mb-6">
+                    <h2 class="text-2xl font-bold text-green-800">Sample Analysis</h2>
+                </div>
                 
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
-                    <!-- Calibration Picker -->
-                    <div>
-                        <h3 class="text-lg font-bold mb-3 text-gray-700">1. Select Calibration</h3>
-                        <div class="relative">
-                            <select id="calib-picker" class="w-full border border-gray-300 rounded-lg p-3 bg-white shadow-sm focus:ring-2 focus:ring-green-500 transition-all appearance-none cursor-pointer">
-                                <option value="">-- Load Saved Calibration --</option>
-                            </select>
+                <div class="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+                    <!-- LEFT COLUMN: Guide & Calibration Selection -->
+                    <div class="lg:col-span-4 space-y-4">
+                        <!-- 1. Quick Guide (Very Compact) -->
+                        <div class="p-4 bg-green-50/50 border border-green-100 rounded-2xl">
+                            <h4 class="text-[10px] font-black text-green-800 uppercase tracking-widest mb-2">Quick Guide</h4>
+                            <div class="text-[10px] text-green-900 space-y-1">
+                                <p><span class="font-bold">1.</span> Select a Calibration Profile.</p>
+                                <p><span class="font-bold">2.</span> Upload zipped data on the right.</p>
+                                <p><span class="font-bold">3.</span> Pick peaks in the spectrum.</p>
+                            </div>
                         </div>
-                        <div id="selected-calib-summary" class="mt-3 text-xs text-green-700 font-medium hidden bg-green-100 p-2 rounded italic"></div>
+
+                        <!-- 2. Step 1: Calibration Profile -->
+                        <div class="p-5 bg-white border border-gray-200 rounded-2xl shadow-sm">
+                            <h3 class="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-3">Step 1: Calibration</h3>
+                            <div class="relative">
+                                <select id="calib-picker" class="w-full border border-gray-300 rounded-xl p-3 bg-white shadow-sm focus:ring-2 focus:ring-green-500 transition-all appearance-none cursor-pointer font-bold text-gray-800 text-xs text-center">
+                                    <option value="">-- Load Saved Profile --</option>
+                                </select>
+                            </div>
+                            <div id="selected-calib-summary" class="mt-3 text-[10px] text-green-700 font-medium hidden bg-green-50/30 p-3 rounded-xl border border-green-100 italic"></div>
+                        </div>
                     </div>
 
-                    <!-- Sample Upload -->
-                    <div>
-                        <h3 class="text-lg font-bold mb-3 text-gray-700">2. Upload Sample Dataset</h3>
-                        <div id="dropzone-sample" class="dropzone p-10 rounded-xl text-center cursor-pointer bg-white shadow-sm hover:shadow-md transition-shadow">
-                            <div id="dropzone-text-sample">
-                                <p class="text-gray-500 mb-2 font-medium">Drag & Drop zipped sample data</p>
+                    <!-- RIGHT COLUMN: Upload Box (Swaps for Plot) -->
+                    <div class="lg:col-span-8">
+                        <div id="analysis-upload-area" class="flex flex-col">
+                            <h3 class="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">Step 2: Data Source</h3>
+                            <div id="dropzone-sample" class="dropzone p-10 rounded-3xl text-center cursor-pointer bg-white shadow-sm hover:shadow-md transition-all flex flex-col justify-center border-2 border-dashed border-green-200 h-[250px]">
+                                <div id="dropzone-text-sample">
+                                    <i class="fas fa-cloud-upload-alt text-4xl text-green-200 mb-3"></i>
+                                    <p class="text-gray-500 text-sm font-bold">Drag & Drop Sample .zip</p>
+                                    <p class="text-[10px] text-gray-400 mt-1">Bruker (ser/fid) or Varian</p>
+                                </div>
+                                <div id="loader-sample" class="hidden">
+                                    <div class="animate-spin rounded-full h-10 w-10 border-b-2 border-green-600 mx-auto mb-2"></div>
+                                    <p class="text-green-600 text-[10px] font-black uppercase">Processing Workspace...</p>
+                                </div>
+                                <input type="file" id="file-sample" class="hidden" accept=".zip">
                             </div>
-                            <!-- Loader (Initially Hidden) -->
-                            <div id="loader-sample" class="hidden">
-                                <div class="animate-spin rounded-full h-10 w-10 border-b-2 border-green-600 mx-auto mb-2"></div>
-                                <p class="text-green-600 text-xs font-bold uppercase">Processing Data...</p>
-                            </div>
-                            <input type="file" id="file-sample" class="hidden" accept=".zip">
                         </div>
-                        <div id="status-sample" class="mt-3 text-sm font-semibold text-green-600 hidden">Processing...</div>
+
+                        <!-- Verification Plot (Hidden until Step 2 is complete) -->
+                        <div id="analysis-verification-area" class="hidden flex flex-col">
+                            <h3 class="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">Data Verification (Stacked)</h3>
+                            <div class="bg-white border border-gray-200 rounded-3xl shadow-sm overflow-hidden relative min-h-[400px]">
+                                <div id="plot-stacked-sample" class="w-full h-[400px]"></div>
+                            </div>
+                            <button onclick="resetAnalysisUpload()" class="mt-2 text-[10px] text-gray-400 hover:text-green-600 font-bold self-end pr-2 transition-colors">
+                                ↻ Upload Different Dataset
+                            </button>
+                        </div>
                     </div>
                 </div>
             </div>
 
             <!-- Analysis Workspace (Hidden until upload) -->
-            <div id="analysis-workspace" class="hidden space-y-8">
-                <div class="p-6 bg-white border border-gray-200 rounded-xl shadow-sm">
-                    <h3 class="text-xl font-bold mb-2">Identify Sample Peaks</h3>
-                    <p class="text-sm text-gray-500 mb-4 font-medium italic">You can click multiple peaks to add them to your analysis list.</p>
-                    <div id="plot-analysis-selection" class="w-full h-[500px] bg-gray-50 rounded-lg"></div>
+            <div id="analysis-workspace" class="hidden space-y-8 mt-12">
+                <div class="p-8 bg-white border border-gray-200 rounded-3xl shadow-sm">
+                    <div class="flex justify-between items-end mb-6">
+                        <div>
+                            <h3 class="text-2xl font-bold text-gray-800">Peak Selection List</h3>
+                            <p class="text-sm text-gray-500 font-medium italic">Click peaks in the spectra above or select from the auto-detected list.</p>
+                        </div>
+                    </div>
+                    
+                    <div id="plot-selection-analysis-top" class="w-full h-[550px] bg-gray-50 rounded-3xl border border-dashed border-gray-300"></div>
                 </div>
 
-                <div id="peak-analysis-list" class="grid grid-cols-1 gap-6">
+                <div id="analysis-controls" class="grid grid-cols-1 lg:grid-cols-3 gap-8 hidden">
+                    <!-- Peak List & Method Selection -->
+                    <div class="lg:col-span-1 space-y-6">
+                        <div class="p-6 bg-white border border-gray-200 rounded-xl shadow-sm">
+                            <h3 class="text-lg font-bold text-gray-800 mb-4">Selected Peaks</h3>
+                            <div id="peak-chips-container" class="flex flex-wrap gap-2 mb-6 min-h-[40px] p-3 bg-gray-50 rounded-lg border border-dashed border-gray-200">
+                                <span class="text-xs text-gray-400 italic">No peaks selected yet...</span>
+                            </div>
+
+                            <h3 class="text-sm font-black text-gray-400 uppercase tracking-widest mb-4">Measurement Method</h3>
+                            <div class="space-y-3">
+                                <label class="flex items-center p-3 rounded-xl border border-gray-100 hover:bg-blue-50 cursor-pointer transition-colors">
+                                    <input type="radio" name="analysis-method" value="intensity" checked class="w-4 h-4 text-blue-600">
+                                    <div class="ml-3 text-sm">
+                                        <div class="font-bold text-gray-700">Peak Intensity</div>
+                                        <div class="text-[10px] text-gray-500">Uses maximum height (Auto-finding max near click)</div>
+                                    </div>
+                                </label>
+                                <label class="flex items-center p-3 rounded-xl border border-gray-100 hover:bg-blue-50 cursor-pointer transition-colors">
+                                    <input type="radio" name="analysis-method" value="area" class="w-4 h-4 text-blue-600">
+                                    <div class="ml-3 text-sm">
+                                        <div class="font-bold text-gray-700">Peak Integral (Area)</div>
+                                        <div class="text-[10px] text-gray-500">Uses lineshape fitting (Lorentzian/Gaussian)</div>
+                                    </div>
+                                </label>
+                            </div>
+
+                            <button id="btn-run-analysis" class="w-full mt-6 bg-green-600 text-white py-3 rounded-xl font-bold shadow-lg hover:bg-green-700 active:scale-95 transition-all">
+                                Run Decay Analysis
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Analysis Results / Plots -->
+                    <div class="lg:col-span-2 space-y-6">
+                        <div class="p-6 bg-white border border-gray-200 rounded-xl shadow-sm min-h-[300px]">
+                            <h3 class="text-lg font-bold text-gray-800 mb-4">Diffusion Results</h3>
+                            <div id="analysis-results-placeholder" class="flex flex-col items-center justify-center h-[200px] text-gray-400">
+                                <i class="fas fa-chart-line text-3xl mb-2"></i>
+                                <p class="text-xs font-medium">Select peaks and click "Run Analysis" to calculate D</p>
+                            </div>
+                            <div id="analysis-plots-container" class="hidden space-y-8">
+                                <!-- Extraction Summary -->
+                                <div id="analysis-params-banner" class="bg-blue-50 border border-blue-100 p-4 rounded-xl flex flex-wrap gap-6 items-center">
+                                    <div class="flex items-center gap-2">
+                                        <div>
+                                            <p class="text-[10px] text-blue-500 uppercase tracking-wider font-bold">Pulse Program</p>
+                                            <p id="info-pulseprog" class="text-sm font-bold text-blue-800">-</p>
+                                        </div>
+                                    </div>
+                                    <div class="flex items-center gap-2 border-l border-blue-100 pl-6">
+                                        <div>
+                                            <p class="text-[10px] text-blue-500 uppercase tracking-wider font-bold">δ (Grad Pulse)</p>
+                                            <p id="info-delta" class="text-sm font-bold text-blue-800">-</p>
+                                        </div>
+                                    </div>
+                                    <div class="flex items-center gap-2 border-l border-blue-100 pl-6">
+                                        <div>
+                                            <p class="text-[10px] text-blue-500 uppercase tracking-wider font-bold">Δ (Diffusion)</p>
+                                            <p id="info-bigdelta" class="text-sm font-bold text-blue-800">-</p>
+                                        </div>
+                                    </div>
+                                    <div class="ml-auto text-right">
+                                        <p class="text-[10px] text-gray-400 uppercase tracking-wider font-bold">Applied Calibration</p>
+                                        <p id="info-calname" class="text-xs font-bold text-gray-600">-</p>
+                                    </div>
+                                </div>
+
+                                <div id="analysis-decay-plot" class="w-full h-[400px]"></div>
+                                <div class="overflow-x-auto">
+                                    <table class="w-full text-sm text-left border-collapse">
+                                        <thead>
+                                            <tr class="bg-gray-50 text-gray-600 font-bold border-b">
+                                                <th class="px-4 py-3">Peak (ppm)</th>
+                                                <th class="px-4 py-3">Fit Quality (R²)</th>
+                                                <th class="px-4 py-3">D (m²/s)</th>
+                                                <th class="px-4 py-3 text-right">Error (%)</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="diffusion-results-body" class="divide-y divide-gray-100">
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -262,6 +378,22 @@
             if (tab === 'analysis') {
                 loadCalibrations();
             }
+        }
+
+        function resetAnalysisUpload() {
+            document.getElementById('analysis-upload-area').classList.remove('hidden');
+            document.getElementById('analysis-verification-area').classList.add('hidden');
+            document.getElementById('analysis-workspace').classList.add('hidden');
+            document.getElementById('analysis-controls').classList.add('hidden');
+            
+            // Clear previous results/plots
+            document.getElementById('analysis-results-placeholder').classList.remove('hidden');
+            document.getElementById('analysis-plots-container').classList.add('hidden');
+            document.getElementById('diffusion-results-body').innerHTML = '';
+            
+            currentNmrData = null;
+            selectedPeaks = [];
+            updatePeakChips();
         }
 
         function loadCalibrations() {
@@ -369,8 +501,14 @@
                         document.getElementById('calib-workspace').classList.remove('hidden');
                         renderSelectionPlot('plot-selection', data.plot_data, handleCalibrationPeakClick);
                     } else {
+                        // Swap: Hide upload box, show plot in its place
+                        document.getElementById('analysis-upload-area').classList.add('hidden');
+                        document.getElementById('analysis-verification-area').classList.remove('hidden');
+                        
+                        renderStackedPlot('plot-stacked-sample', data.plot_data.stacked_data);
+
                         document.getElementById('analysis-workspace').classList.remove('hidden');
-                        renderSelectionPlot('plot-analysis-selection', data.plot_data, handleAnalysisPeakClick);
+                        renderSelectionPlot('plot-selection-analysis-top', data.plot_data, handleAnalysisPeakClick);
                     }
                 }
             });
@@ -422,11 +560,18 @@
         function renderSelectionPlot(divId, plotData, callback) {
             const layout = {
                 title: 'Chemical Shift Spectrum (Slice 1)',
-                xaxis: { title: 'Chemical Shift (ppm)', autorange: 'reversed' },
-                yaxis: { title: 'Intensity', showticklabels: false },
-                margin: { l: 40, r: 40, t: 40, b:40 }
+                xaxis: { title: 'Chemical Shift (ppm)', autorange: 'reversed', zeroline: false },
+                yaxis: { 
+                    title: 'Intensity', 
+                    showticklabels: true, 
+                    exponentformat: 'e',
+                    showexponent: 'all',
+                    zeroline: false 
+                },
+                margin: { l: 60, r: 40, t: 40, b:40 }
             };
-            Plotly.newPlot(divId, plotData.selection_data, layout);
+            const config = { responsive: true, displayModeBar: false };
+            Plotly.newPlot(divId, plotData.selection_data, layout, config);
             document.getElementById(divId).on('plotly_click', callback);
         }
 
@@ -485,12 +630,12 @@
                 }
             ], { 
                 title: 'Gradient Linearity', 
-                xaxis: {title:'Setting (%)', range: [0, 105]}, 
-                yaxis: {title:'Strength (G/cm)'}, 
+                xaxis: {title:'Setting (%)', range: [0, 105], zeroline: false}, 
+                yaxis: {title:'Strength (G/cm)', zeroline: false}, 
                 margin: {t:40},
                 showlegend: true,
                 legend: {x: 0, y: 1}
-            });
+            }, { responsive: true, displayModeBar: false });
             const tbody = document.getElementById('gradient-table-body');
             tbody.innerHTML = '';
             data.gradients.forEach((g, i) => {
@@ -504,10 +649,159 @@
             });
         }
 
+        let selectedPeaks = [];
+
         function handleAnalysisPeakClick(clickData) {
-            if (!selectedCalibration) { alert("Please select a saved calibration profile first."); return; }
-            const ppm = clickData.points[0].x;
-            alert(`Peak selected at ${ppm.toFixed(3)} ppm. In development!`);
+            const ppm = parseFloat(clickData.points[0].x).toFixed(3);
+            
+            // Toggle selection
+            if (selectedPeaks.includes(ppm)) {
+                selectedPeaks = selectedPeaks.filter(p => p !== ppm);
+            } else {
+                selectedPeaks.push(ppm);
+                selectedPeaks.sort((a,b) => b-a); // Sort high to low ppm
+            }
+            
+            updatePeakChips();
+            
+            // Show controls if peaks exist
+            const controls = document.getElementById('analysis-controls');
+            if (selectedPeaks.length > 0) {
+                controls.classList.remove('hidden');
+            } else {
+                controls.classList.add('hidden');
+            }
+        }
+
+        function updatePeakChips() {
+            const container = document.getElementById('peak-chips-container');
+            if (selectedPeaks.length === 0) {
+                container.innerHTML = '<span class="text-xs text-gray-400 italic">No peaks selected yet...</span>';
+                return;
+            }
+            
+            container.innerHTML = selectedPeaks.map(ppm => `
+                <div class="flex items-center bg-blue-100 text-blue-800 text-[10px] font-bold px-2 py-1 rounded-lg border border-blue-200">
+                    <span>${ppm} ppm</span>
+                    <button onclick="removePeak('${ppm}')" class="ml-2 text-blue-400 hover:text-blue-600">×</button>
+                </div>
+            `).join('');
+        }
+
+        function removePeak(ppm) {
+            selectedPeaks = selectedPeaks.filter(p => p !== ppm);
+            updatePeakChips();
+            if (selectedPeaks.length === 0) {
+                document.getElementById('analysis-controls').classList.add('hidden');
+            }
+        }
+
+        document.getElementById('btn-run-analysis').addEventListener('click', () => {
+            if (!selectedCalibration) { alert("Please select a calibration profile first."); return; }
+            if (selectedPeaks.length === 0) { alert("Please select at least one peak."); return; }
+
+            // INSTANT FEEDBACK: Change state BEFORE gathering payload or fetching
+            const btn = document.getElementById('btn-run-analysis');
+            const originalText = btn.textContent;
+            btn.disabled = true;
+            btn.innerHTML = `<i class="fas fa-spinner fa-spin mr-2"></i> Analyzing Peaks...`;
+
+            const method = document.querySelector('input[name="analysis-method"]:checked').value;
+            const payload = {
+                peaks: selectedPeaks.map(p => parseFloat(p)),
+                method: method,
+                calibration_id: selectedCalibration.id,
+                nmr_data: currentNmrData
+            };
+
+            fetch('/analyze_diffusion', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            })
+            .then(res => res.json())
+            .then(data => {
+                btn.disabled = false;
+                btn.textContent = originalText;
+                
+                if (data.error) {
+                    alert(data.error);
+                } else {
+                    displayDiffusionResults(data);
+                }
+            })
+            .catch(err => {
+                btn.disabled = false;
+                btn.textContent = originalText;
+                alert("Analysis failed. Check console.");
+            });
+        });
+
+        function displayDiffusionResults(data) {
+            document.getElementById('analysis-results-placeholder').classList.add('hidden');
+            document.getElementById('analysis-plots-container').classList.remove('hidden');
+
+            // Update Parameter Banner
+            document.getElementById('info-pulseprog').textContent = data.params.pulse_program.toUpperCase();
+            document.getElementById('info-delta').textContent = (data.params.delta * 1000).toFixed(2) + ' ms';
+            document.getElementById('info-bigdelta').textContent = (data.params.big_delta * 1000).toFixed(1) + ' ms';
+            document.getElementById('info-calname').textContent = data.params.calibration_name;
+
+            // Render Decay Plot (Multiple series if multiple peaks)
+            const plotData = [];
+            data.results.forEach(res => {
+                // 1. Experimental Data Points
+                plotData.push({
+                    x: res.gradients,
+                    y: res.intensities,
+                    mode: 'markers',
+                    name: `${res.ppm} ppm`,
+                    marker: { size: 8 }
+                });
+
+                // 2. High-Resolution Fit Line
+                if (res.fit_line) {
+                    plotData.push({
+                        x: res.fit_line.x,
+                        y: res.fit_line.y,
+                        mode: 'lines',
+                        name: `Fit (${res.ppm.toFixed(2)} ppm)`,
+                        line: { width: 2, shape: 'spline' }
+                    });
+                } else {
+                    // Fallback
+                    plotData.push({
+                        x: res.gradients,
+                        y: res.fit_intensities,
+                        mode: 'lines',
+                        name: `Fit (${res.ppm.toFixed(2)} ppm)`,
+                        line: { dash: 'dot', width: 1 }
+                    });
+                }
+            });
+
+            Plotly.newPlot('analysis-decay-plot', plotData, {
+                title: 'Decay Fits for Selected Peaks',
+                xaxis: { title: 'Gradient Strength (G/cm)', zeroline: false },
+                yaxis: { 
+                    title: 'Normalized Intensity (I/I₀)', 
+                    zeroline: false,
+                    exponentformat: 'e',
+                    showexponent: 'all'
+                },
+                margin: { t: 40 }
+            }, { responsive: true, displayModeBar: false });
+
+            // Fill Table
+            const tbody = document.getElementById('diffusion-results-body');
+            tbody.innerHTML = data.results.map(res => `
+                <tr class="hover:bg-gray-50 transition-colors">
+                    <td class="px-4 py-3 font-mono font-bold">${res.ppm.toFixed(3)}</td>
+                    <td class="px-4 py-3 font-mono text-gray-500">${res.r_squared.toFixed(4)}</td>
+                    <td class="px-4 py-3 font-mono text-green-700 font-bold">${res.d_value.toExponential(3)}</td>
+                    <td class="px-4 py-3 text-right font-mono text-gray-400">${(res.error_pct * 100).toFixed(1)}%</td>
+                </tr>
+            `).join('');
         }
 
         document.getElementById('btn-save-calib').addEventListener('click', () => document.getElementById('modal-save').classList.remove('hidden'));

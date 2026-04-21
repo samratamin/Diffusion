@@ -67,6 +67,188 @@ os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 def index():
     return render_template('index.html')
 
+from scipy.optimize import curve_fit
+from scipy.signal import find_peaks
+
+@app.route('/analyze_diffusion', methods=['POST'])
+def analyze_diffusion():
+    try:
+        data = request.json
+        peaks_ppm = data.get('peaks', [])
+        method = data.get('method', 'intensity')
+        calibration_id = data.get('calibration_id')
+        plot_data = data.get('nmr_data', {})
+        
+        # 1. Fetch Calibration from DB
+        conn = sqlite3.connect(DB_FILE)
+        conn.row_factory = sqlite3.Row
+        cal = conn.execute("SELECT * FROM calibrations WHERE id = ?", (calibration_id,)).fetchone()
+        conn.close()
+        
+        if not cal:
+            return jsonify({'error': 'Calibration profile not found.'}), 404
+
+        # 2. Extract Experimental Parameters from the Dataset
+        # Priority: Parameters extracted from the uploaded files (acqus, etc.)
+        exp_params = plot_data.get('exp_params', {})
+        
+        # Pull pulse program to determine the sequence and appropriate equation
+        pulse_program = exp_params.get('pulse_program', 'unknown').lower()
+        
+        # Little delta (total gradient duration) and Big Delta (diffusion time)
+        # We default to calibration values IF they are not found in the dataset,
+        # but the DATASET values should override calibration for unknown samples.
+        delta = exp_params.get('delta', cal['delta'])
+        big_delta = exp_params.get('big_delta', cal['big_delta'])
+        
+        # Calibration constants (Slope/Intercept)
+        gamma = 2.67522e8 # 1H gyromagnetic ratio (rad/s/T)
+        m = cal['fit_slope']
+        c = cal['fit_intercept']
+
+        results_list = []
+        # Support both 'ppm' and 'ppm_full' keys if they differ in plot_data
+        # Revised check: process_nmr_data returns 'raw_ppm'
+        ppm_array = np.array(plot_data.get('raw_ppm', plot_data.get('ppm', plot_data.get('ppm_full', []))))
+        if len(ppm_array) == 0:
+            # Fallback if the data structure is different
+            return jsonify({'error': 'Data structure mismatch: PPM array not found.'}), 500
+        
+        full_ppm = ppm_array
+        
+        # Extract raw spectra to avoid including stackplot offsets (y_offset) in the fit
+        raw_spectra = np.array(plot_data.get('raw_spectra', []))
+        if len(raw_spectra) == 0:
+            return jsonify({'error': 'Raw spectral data missing for analysis.'}), 400
+
+        # Calculate X values for fitting (GRADIENTS)
+        # Gradient DAC settings come from 'difframp' as fractions (0.0 to 1.0)
+        x_points = np.array(plot_data.get('difframp', []))
+        if len(x_points) == 0:
+             return jsonify({'error': 'Gradient settings missing in data.'}), 400
+        
+        # Calculate gradients in G/cm using the user's chosen calibration slope/intercept
+        # Formula: G = slope * (fraction) + intercept
+        gradients = (m * x_points + c)
+        
+        # Determine sequence-specific fitting equation
+        # 1. Convert G/cm to T/m: 1 G/cm = 0.01 T/m
+        g_tesla_m = gradients * 0.01
+        
+        # DEFAULT: Basic Stejskal-Tanner (Double Stimulated Echo / BPPG)
+        # Equation: I = I0 * exp(-D * (gamma * g * delta)^2 * (Delta - delta/3 - tau/2...))
+        # Note: 'delta' is already the total gradient duration from param extraction
+        if 'stebpgp' in pulse_program or 'bpp' in pulse_program:
+            # BPP-STE (Bipolar Pulse Pair)
+            # For Bipolar, the factor is (gamma * G * delta)^2 * (Delta - delta/3 - tau/2)
+            # But the 'effective' delta in some literature for Bruker is 2*p30.
+            # Here we follow Bruker's standard: X = (gamma * g * delta)^2 * (Delta - delta/3.0)
+            st_x = (gamma * g_tesla_m * delta)**2 * (big_delta - delta/3.0)
+        elif 'led' in pulse_program:
+             # LED (Longitudinal Eddy Current Delay)
+             st_x = (gamma * g_tesla_m * delta)**2 * (big_delta - delta/3.0)
+        else:
+            # General ST equation
+            st_x = (gamma * g_tesla_m * delta)**2 * (big_delta - delta/3.0)
+
+        for target_ppm in peaks_ppm:
+            # Find the best index in the PPM array
+            idx = np.argmin(np.abs(full_ppm - target_ppm))
+            
+            intensities = []
+            for slice_idx in range(len(raw_spectra)):
+                # Use raw_spectra instead of stacked_data['y'] (which has offsets)
+                slice_y = np.array(raw_spectra[slice_idx])
+                
+                if method == 'intensity':
+                    # Auto-find max in a small window (e.g. +/- 0.05 ppm)
+                    window = 15 # points
+                    start = max(0, idx - window)
+                    end = min(len(slice_y), idx + window)
+                    val = np.max(slice_y[start:end])
+                else:
+                    # Simple summation area for now (can be expanded to lorentzian fitting)
+                    window = 25
+                    start = max(0, idx - window)
+                    end = min(len(slice_y), idx + window)
+                    val = np.sum(slice_y[start:end])
+                
+                intensities.append(val)
+            
+            intensities = np.array(intensities)
+            
+            # Linear fit in log-space: ln(I/I0) = -D * ST_X
+            # Normalization: I/I0
+            I0 = intensities[0] if intensities[0] > 0 else 1.0
+            norm_intensities = intensities / I0
+            
+            # Robust fitting: Only fit points where intensity is above noise floor (e.g. 2% of I0)
+            noise_floor = 0.02
+            valid = (norm_intensities > noise_floor)
+            
+            if np.sum(valid) < 3:
+                valid = np.zeros_like(norm_intensities, dtype=bool)
+                valid[:min(3, len(valid))] = True
+                
+            log_i = np.log(norm_intensities[valid])
+            x_fit = st_x[valid]
+            
+            # ln(I/I0) = -D * ST_X + offset
+            slope, intercept = np.polyfit(x_fit, log_i, 1)
+            d_value = -slope
+            
+            # Calculate R-squared and proper error statistics
+            log_fit_at_points = slope * x_fit + intercept
+            ss_res = np.sum((log_i - log_fit_at_points)**2)
+            ss_tot = np.sum((log_i - np.mean(log_i))**2)
+            r2 = 1 - (ss_res / ss_tot) if ss_tot != 0 else 0
+            
+            # Estimate error using standard deviation of the slope
+            # For simpler UI, we'll use a standard error of the fit
+            n_points = np.sum(valid)
+            std_err = np.sqrt(ss_res / (n_points - 2)) / np.sqrt(np.sum((x_fit - np.mean(x_fit))**2)) if n_points > 2 else 0.1
+            error_pct = (std_err / abs(slope)) if slope != 0 else 1.0
+
+            # Fit intensities for display (normalized 0-1) across the full range
+            # Increase resolution to 500 points for a perfectly smooth curve
+            # We map from G_min to G_max (physical gradient units)
+            g_smooth = np.linspace(0, np.max(gradients), 500)
+            g_tesla_m_smooth = g_smooth * 0.01
+            st_x_smooth = (gamma * g_tesla_m_smooth * delta)**2 * (big_delta - delta/3.0)
+            
+            fit_intensities_smooth = np.exp(slope * st_x_smooth + intercept)
+            
+            # Also calculate the fit values at the actual data points for UI
+            fit_intensities_at_points = np.exp(slope * st_x + intercept)
+
+            results_list.append({
+                'ppm': float(target_ppm),
+                'intensities': norm_intensities.tolist(), 
+                'fit_intensities': fit_intensities_at_points.tolist(),
+                'fit_line': {
+                    'x': g_smooth.tolist(),
+                    'y': fit_intensities_smooth.tolist()
+                },
+                'gradients': gradients.tolist(),
+                'd_value': float(d_value),
+                'r_squared': float(r2),
+                'error_pct': float(error_pct)
+            })
+
+        return jsonify({
+            'results': results_list,
+            'params': {
+                'delta': delta,
+                'big_delta': big_delta,
+                'pulse_program': pulse_program,
+                'calibration_name': cal['name']
+            }
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/upload', methods=['POST'])
 def upload_file():
     if 'file' not in request.files:
@@ -132,13 +314,23 @@ def process_nmr_data(extract_dir):
         dic, data = ng.bruker.read(data_path)
         
         # Helper to parse indexed arrays like $P= (0..63)
-        def get_bruker_param(file_path, prefix, index):
+        def get_bruker_item(dic, file_path, prefix, index):
+            # Try to get from dic first (nmrglue usually parses these into lists)
+            try:
+                if prefix == 'P' and 'P' in dic['acqus']:
+                    return float(dic['acqus']['P'][index])
+                if prefix == 'D' and 'D' in dic['acqus']:
+                    return float(dic['acqus']['D'][index])
+            except:
+                pass
+            
+            # Fallback to manual parsing if nmrglue didn't get it
             try:
                 with open(file_path, 'r') as f:
                     lines = f.readlines()
+                target = f"##${prefix}="
                 for i, line in enumerate(lines):
-                    if f"##${prefix}= (0.." in line:
-                        # Values are on subsequent lines
+                    if target in line:
                         vals = []
                         j = i + 1
                         while j < len(lines) and not lines[j].startswith('##'):
@@ -155,12 +347,15 @@ def process_nmr_data(extract_dir):
             acqus_path = os.path.join(data_path, 'acqus')
             if os.path.exists(acqus_path):
                 # P[30] is the pulse duration for the gradient half-pulse in stebpgp1s
-                val_p30 = get_bruker_param(acqus_path, 'P', 30)
+                val_p30 = get_bruker_item(dic, acqus_path, 'P', 30)
                 if val_p30 is not None:
                     # Little delta (total gradient duration) = 2 * P[30]
                     params['delta'] = 2.0 * val_p30 / 1000000.0
                 
                 # D[20] is the diffusion time (Big Delta)
+                val_d20 = get_bruker_item(dic, acqus_path, 'D', 20)
+                if val_d20 is not None:
+                    params['big_delta'] = val_d20
             # Check for difflist
             difflist_path = os.path.join(data_path, 'difflist')
             if os.path.exists(difflist_path):
@@ -225,6 +420,9 @@ def process_nmr_data(extract_dir):
         # In a real scenario, we'd check more metadata or the user might name their folder 'd2o_...'
         folder_name = os.path.normpath(data_path).split(os.sep)
         folder_search = " ".join(folder_name).lower()
+
+        # Extract Pulse Program name
+        params['pulse_program'] = pulse_program if pulse_program else "Unknown"
 
         if 'd2o' in folder_search or 'd2o' in pulse_program:
             detected_standard = 'D2O'
