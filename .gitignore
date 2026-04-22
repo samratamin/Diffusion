@@ -1,0 +1,19 @@
+# Uploaded NMR data
+uploads/
+
+# Databases
+*.db
+
+# Logs
+*.log
+server_debug.log
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.venv/
+
+# macOS
+.DS_Store

@@ -1,4 +1,5 @@
 import os
+import math
 import zipfile
 from flask import Flask, render_template, request, jsonify
 from werkzeug.utils import secure_filename
@@ -8,6 +9,22 @@ import numpy as np
 import json
 import sqlite3
 from scipy.optimize import curve_fit
+import uuid
+
+# In-memory store for uploaded NMR datasets, keyed by session UUID
+_nmr_data_store = {}
+
+def safe_float(v, fallback=0.0):
+    """Return a JSON-safe float, replacing NaN/Inf with fallback."""
+    try:
+        f = float(v)
+        return fallback if (math.isnan(f) or math.isinf(f)) else f
+    except Exception:
+        return fallback
+
+def safe_list(lst, fallback=0.0):
+    """Return a list of JSON-safe floats."""
+    return [safe_float(v, fallback) for v in lst]
 
 # SQLite Configuration
 DB_FILE = 'nmr_diffusion.db'
@@ -77,7 +94,11 @@ def analyze_diffusion():
         peaks_ppm = data.get('peaks', [])
         method = data.get('method', 'intensity')
         calibration_id = data.get('calibration_id')
-        plot_data = data.get('nmr_data', {})
+        data_id = data.get('data_id')
+        if data_id and data_id in _nmr_data_store:
+            plot_data = _nmr_data_store[data_id]
+        else:
+            plot_data = data.get('nmr_data', {})
         omitted_slices = data.get('omitted_slices', [])
         
         # 1. Fetch Calibration from DB
@@ -108,8 +129,24 @@ def analyze_diffusion():
         c = cal['fit_intercept']
 
         def lorentzian(x, amp, cen, wid, offset):
-            """Lorentzian lineshape for peak fitting"""
-            return (amp * wid**2 / ((x - cen)**2 + wid**2)) + offset
+            """Lorentzian: wid = HWHM"""
+            return amp * wid**2 / ((x - cen)**2 + wid**2) + offset
+
+        def gaussian(x, amp, cen, sig, offset):
+            """Gaussian: sig = sigma"""
+            return amp * np.exp(-0.5 * ((x - cen) / sig)**2) + offset
+
+        def pseudo_voigt(x, amp, cen, wid, eta, offset):
+            """Pseudo-Voigt: linear mix of Lorentzian and Gaussian.
+            eta = 0 → pure Gaussian, eta = 1 → pure Lorentzian"""
+            lor = wid**2 / ((x - cen)**2 + wid**2)
+            gau = np.exp(-0.5 * ((x - cen) / wid)**2)
+            return amp * (eta * lor + (1 - eta) * gau) + offset
+
+        def r_squared(y_data, y_fit):
+            ss_res = np.sum((y_data - y_fit)**2)
+            ss_tot = np.sum((y_data - np.mean(y_data))**2)
+            return float(1 - ss_res / ss_tot) if ss_tot > 1e-20 else 0.0
 
         results_list = []
         # Support both 'ppm' and 'ppm_full' keys if they differ in plot_data
@@ -165,43 +202,153 @@ def analyze_diffusion():
 
             for slice_idx in range(len(raw_spectra)):
                 slice_y = np.array(raw_spectra[slice_idx])
-                
-                if method == 'intensity':
-                    window = 15 
+
+                if method in ('intensity', 'intensity_max'):
+                    # Max intensity within ±15 points of the target PPM
+                    window = 15
                     start = max(0, idx - window)
                     end = min(len(slice_y), idx + window)
-                    val = np.max(slice_y[start:end])
+                    segment = slice_y[start:end]
+                    val = float(np.max(segment)) if len(segment) > 0 else 0.0
                     peak_fit_models.append(None)
-                else:
-                    # LORENTZIAN PEAK FITTING (DECONVOLUTION)
-                    window = 30 # Slightly larger for fitting
-                    start = max(0, idx - window)
-                    end = min(len(slice_y), idx + window)
-                    
-                    x_fit_vals = full_ppm[start:end]
-                    y_fit_vals = slice_y[start:end]
-                    
-                    # Initial guesses: [amplitude, center, width, offset]
-                    amp_guess = np.max(y_fit_vals)
-                    cen_guess = full_ppm[idx]
-                    wid_guess = 0.015 # Typical linewidth in ppm
-                    off_guess = np.min(y_fit_vals)
-                    
-                    try:
-                        popt, _ = curve_fit(lorentzian, x_fit_vals, y_fit_vals, 
-                                          p0=[amp_guess, cen_guess, wid_guess, off_guess],
-                                          bounds=([0, cen_guess-0.1, 0, -np.inf], [np.inf, cen_guess+0.1, 1.0, np.inf]))
-                        # Area of Lorentzian = pi * amplitude * width
-                        val = np.pi * popt[0] * popt[2]
-                        peak_fit_models.append({
-                            'x': x_fit_vals.tolist(),
-                            'y_fit': lorentzian(x_fit_vals, *popt).tolist(),
-                            'params': popt.tolist()
-                        })
-                    except:
-                        # Fallback to simple integration if fit fails
-                        val = np.sum(y_fit_vals)
+
+                elif method == 'intensity_exact':
+                    # Intensity at the exact PPM index (no window search)
+                    val = float(slice_y[idx]) if idx < len(slice_y) else 0.0
+                    peak_fit_models.append(None)
+
+                else:  # method in ('area', 'intensity_fit')
+                    # --- MULTI-MODEL PEAK FITTING ---
+                    # Dynamic window: walk from peak centre to 0.5% of peak height
+                    slice_y_ref = np.array(raw_spectra[0])
+                    peak_amp_ref = float(slice_y_ref[idx]) if float(slice_y_ref[idx]) > 0 else float(np.max(slice_y_ref))
+                    threshold = peak_amp_ref * 0.005
+
+                    left = idx
+                    while left > 0 and slice_y_ref[left] > threshold:
+                        left -= 1
+                    right = idx
+                    while right < len(slice_y_ref) - 1 and slice_y_ref[right] > threshold:
+                        right += 1
+
+                    padding = 25
+                    start = max(0, left - padding)
+                    end   = min(len(slice_y), right + padding)
+
+                    x_seg = full_ppm[start:end]
+                    y_seg = slice_y[start:end]
+
+                    if len(y_seg) < 8:
+                        val = 0
                         peak_fit_models.append(None)
+                    else:
+                        # Baseline estimate from window edges
+                        n_edge   = max(3, len(y_seg) // 10)
+                        baseline = float(np.median(np.concatenate([y_seg[:n_edge], y_seg[-n_edge:]])))
+                        y_sub    = y_seg - baseline
+
+                        amp_g    = float(np.max(y_sub))
+                        cen_g    = float(full_ppm[idx])
+                        half_max = amp_g / 2.0
+                        above    = x_seg[y_sub >= half_max]
+                        hwhm_g   = float(abs(above[-1] - above[0]) / 2.0) if len(above) >= 2 else float(abs(full_ppm[1] - full_ppm[0]) * 3)
+                        hwhm_g   = max(hwhm_g, 1e-4)
+                        sig_g    = hwhm_g / np.sqrt(2 * np.log(2))  # HWHM → sigma for Gaussian
+
+                        fits = {}  # name → (popt, r2, area, fwhm, fn_name)
+
+                        # --- Lorentzian ---
+                        try:
+                            popt_l, _ = curve_fit(
+                                lorentzian, x_seg, y_seg,
+                                p0=[amp_g, cen_g, hwhm_g, baseline],
+                                bounds=([0, cen_g-0.3, 1e-5, -np.inf],
+                                        [np.inf, cen_g+0.3, 2.0,  np.inf]),
+                                maxfev=10000
+                            )
+                            r2_l = r_squared(y_seg, lorentzian(x_seg, *popt_l))
+                            area_l = float(np.pi * popt_l[0] * popt_l[2])
+                            fwhm_l = float(2 * popt_l[2])
+                            fits['Lorentzian'] = (popt_l, r2_l, area_l, fwhm_l, 'lorentzian')
+                        except Exception as e:
+                            print(f"    Lorentzian failed slice {slice_idx}: {e}")
+
+                        # --- Gaussian ---
+                        try:
+                            popt_g, _ = curve_fit(
+                                gaussian, x_seg, y_seg,
+                                p0=[amp_g, cen_g, sig_g, baseline],
+                                bounds=([0, cen_g-0.3, 1e-5, -np.inf],
+                                        [np.inf, cen_g+0.3, 2.0,  np.inf]),
+                                maxfev=10000
+                            )
+                            r2_g = r_squared(y_seg, gaussian(x_seg, *popt_g))
+                            area_g = float(popt_g[0] * popt_g[2] * np.sqrt(2 * np.pi))
+                            fwhm_g = float(2 * np.sqrt(2 * np.log(2)) * popt_g[2])
+                            fits['Gaussian'] = (popt_g, r2_g, area_g, fwhm_g, 'gaussian')
+                        except Exception as e:
+                            print(f"    Gaussian failed slice {slice_idx}: {e}")
+
+                        # --- Pseudo-Voigt ---
+                        try:
+                            popt_v, _ = curve_fit(
+                                pseudo_voigt, x_seg, y_seg,
+                                p0=[amp_g, cen_g, hwhm_g, 0.5, baseline],
+                                bounds=([0, cen_g-0.3, 1e-5, 0, -np.inf],
+                                        [np.inf, cen_g+0.3, 2.0, 1,  np.inf]),
+                                maxfev=15000
+                            )
+                            r2_v = r_squared(y_seg, pseudo_voigt(x_seg, *popt_v))
+                            eta_v = popt_v[3]
+                            area_v = float(eta_v * np.pi * popt_v[0] * popt_v[2] +
+                                           (1 - eta_v) * popt_v[0] * popt_v[2] * np.sqrt(2 * np.pi))
+                            fwhm_v = float(2 * popt_v[2])
+                            fits['Pseudo-Voigt'] = (popt_v, r2_v, area_v, fwhm_v, 'pseudo_voigt')
+                        except Exception as e:
+                            print(f"    Pseudo-Voigt failed slice {slice_idx}: {e}")
+
+                        if fits:
+                            # Pick the model with highest R²
+                            best_name = max(fits, key=lambda k: fits[k][1])
+                            best_popt, best_r2, best_area, best_fwhm, best_fn = fits[best_name]
+
+                            # intensity_fit → use fitted amplitude; area → use integrated area
+                            val = float(best_popt[0]) if method == 'intensity_fit' else best_area
+                            x_dense = np.linspace(x_seg[0], x_seg[-1], 600)
+
+                            if best_fn == 'lorentzian':
+                                y_dense = lorentzian(x_dense, *best_popt)
+                            elif best_fn == 'gaussian':
+                                y_dense = gaussian(x_dense, *best_popt)
+                            else:
+                                y_dense = pseudo_voigt(x_dense, *best_popt)
+
+                            all_r2 = {k: round(v[1], 4) for k, v in fits.items()}
+
+                            peak_fit_models.append({
+                                'x': x_dense.tolist(),
+                                'y_fit': y_dense.tolist(),
+                                'fit_type': best_name,
+                                'r2': round(best_r2, 4),
+                                'area': round(best_area, 4),
+                                'fwhm_ppm': round(best_fwhm, 5),
+                                'center_ppm': round(float(best_popt[1]), 4),
+                                'amplitude': round(float(best_popt[0]), 4),
+                                'all_r2': all_r2
+                            })
+                        else:
+                            # All models failed — fallback
+                            trap_val = float(np.trapz(y_sub, x_seg))
+                            val = amp_g if method == 'intensity_fit' else trap_val
+                            peak_fit_models.append({
+                                'fit_type': 'Trapezoid (fallback)',
+                                'r2': None,
+                                'area': round(trap_val, 4),
+                                'fwhm_ppm': None,
+                                'center_ppm': round(cen_g, 4),
+                                'amplitude': round(amp_g, 4),
+                                'all_r2': {}
+                            })
                 
                 intensities.append(val)
             
@@ -218,31 +365,62 @@ def analyze_diffusion():
             # Robust fitting: Only fit points where intensity is above noise floor (e.g. 2% of I0)
             I0 = intensities[0] if intensities[0] > 0 else 1.0
             norm_intensities_full = intensities / I0
-            noise_floor = 0.02
+            noise_floor = 0.005 # Lower noise floor for better fitting of weak signals
+            
+            # Ensure we don't take log of zero or negative numbers
             valid = (norm_intensities_full > noise_floor) & mask
             
-            if np.sum(valid) < 2:
-                # If everything omitted or too low, fall back to at least 2 points
-                valid = np.ones_like(norm_intensities_full, dtype=bool)
-                valid[len(valid)//2:] = False # heuristic
+            if np.sum(valid) < 3:
+                # If too few points are above noise, pick the strongest points available
+                # (but still respect the omission mask)
+                strongest_indices = np.argsort(norm_intensities_full)[::-1]
+                valid = np.zeros_like(norm_intensities_full, dtype=bool)
+                count = 0
+                for idx_strong in strongest_indices:
+                    if not omitted_slices or idx_strong not in omitted_slices:
+                        if norm_intensities_full[idx_strong] > 1e-10: # Absolute zero protection
+                            valid[idx_strong] = True
+                            count += 1
+                        if count >= 3: break
                 
-            log_i = np.log(norm_intensities_full[valid])
-            x_fit = st_x[valid]
+            # Final sanity check for valid points
+            if np.sum(valid) < 2:
+                # Total fallback if everything is zero/noisy
+                log_i = np.zeros(2)
+                x_fit = np.array([0, 1])
+                slope, intercept = 0, 0
+            else:
+                log_i = np.log(norm_intensities_full[valid])
+                x_fit = st_x[valid]
+                
+                # ln(I/I0) = -D * ST_X + offset
+                try:
+                    slope, intercept = np.polyfit(x_fit, log_i, 1)
+                except Exception as e:
+                    print(f"Fitting error for peak {target_ppm}: {e}")
+                    slope, intercept = 0, 0
             
-            # ln(I/I0) = -D * ST_X + offset
-            slope, intercept = np.polyfit(x_fit, log_i, 1)
             d_value = -slope
             
             # Calculate R-squared and proper error statistics
-            log_fit_at_points = slope * x_fit + intercept
-            ss_res = np.sum((log_i - log_fit_at_points)**2)
-            ss_tot = np.sum((log_i - np.mean(log_i))**2)
-            r2 = 1 - (ss_res / ss_tot) if ss_tot != 0 else 0
-            
-            # Estimate error using standard deviation of the slope
-            # For simpler UI, we'll use a standard error of the fit
-            n_points = np.sum(valid)
-            std_err = np.sqrt(ss_res / (n_points - 2)) / np.sqrt(np.sum((x_fit - np.mean(x_fit))**2)) if n_points > 2 else 0.1
+            if np.sum(valid) >= 2:
+                log_fit_at_points = slope * x_fit + intercept
+                ss_res = np.sum((log_i - log_fit_at_points)**2)
+                mean_log_i = np.mean(log_i)
+                ss_tot = np.sum((log_i - mean_log_i)**2)
+                r2 = 1 - (ss_res / ss_tot) if ss_tot > 1e-12 else 1.0
+                
+                # Estimate error using standard deviation of the slope
+                n_points = np.sum(valid)
+                denom = np.sum((x_fit - np.mean(x_fit))**2)
+                if n_points > 2 and denom > 1e-20:
+                    std_err = np.sqrt(ss_res / (n_points - 2)) / np.sqrt(denom)
+                else:
+                    std_err = 0.1
+            else:
+                r2 = 0
+                std_err = 0.1
+
             error_pct = (std_err / abs(slope)) if slope != 0 else 1.0
 
             # Fit intensities for display (normalized 0-1) across the full range
@@ -258,18 +436,18 @@ def analyze_diffusion():
             fit_intensities_at_points = np.exp(slope * st_x + intercept)
 
             results_list.append({
-                'ppm': float(target_ppm),
-                'intensities': norm_intensities_full.tolist(), 
-                'fit_intensities': fit_intensities_at_points.tolist(),
+                'ppm': safe_float(target_ppm),
+                'intensities': safe_list(norm_intensities_full.tolist()),
+                'fit_intensities': safe_list(fit_intensities_at_points.tolist()),
                 'fit_line': {
-                    'x': g_smooth.tolist(),
-                    'y': fit_intensities_smooth.tolist()
+                    'x': safe_list(g_smooth.tolist()),
+                    'y': safe_list(fit_intensities_smooth.tolist())
                 },
-                'gradients': gradients.tolist(),
-                'd_value': float(d_value),
-                'r_squared': float(r2),
-                'error_pct': float(error_pct),
-                'peak_fits': peak_fit_models # Include the deconvolution fits for verification
+                'gradients': safe_list(gradients.tolist()),
+                'd_value': safe_float(d_value),
+                'r_squared': safe_float(r2),
+                'error_pct': safe_float(error_pct),
+                'peak_fits': peak_fit_models
             })
 
         return jsonify({
@@ -317,7 +495,9 @@ def upload_file():
                 # Store standard name in the response for frontend tracking
                 plot_data['standard_name'] = standard_type
             
-            return jsonify({'message': 'File successfully uploaded and extracted', 'plot_data': plot_data})
+            data_id = str(uuid.uuid4())
+            _nmr_data_store[data_id] = plot_data
+            return jsonify({'message': 'File successfully uploaded and extracted', 'plot_data': plot_data, 'data_id': data_id})
         except Exception as e:
             import traceback
             traceback.print_exc()

@@ -263,20 +263,36 @@
                                         <div class="flex items-center gap-2 mb-2">
                                             <h3 class="text-[10px] font-black text-gray-400 uppercase tracking-widest">Measurement Method</h3>
                                         </div>
-                                        <div class="flex gap-4">
+                                        <!-- Top-level: Intensity vs Integral -->
+                                        <div class="flex gap-3 mb-2">
                                             <label class="flex items-center px-4 py-2 rounded-xl border border-gray-100 hover:bg-blue-50 cursor-pointer transition-all bg-gray-50 group">
-                                                <input type="radio" name="analysis-method" value="intensity" checked class="w-4 h-4 text-blue-600">
+                                                <input type="radio" name="method-category" value="intensity" checked onchange="onMethodCategoryChange()" class="w-4 h-4 text-blue-600">
                                                 <div class="ml-3">
                                                     <span class="block text-xs font-bold text-gray-700">Intensity</span>
                                                     <span class="block text-[9px] text-gray-400 group-hover:text-blue-400">Peak Height</span>
                                                 </div>
                                             </label>
                                             <label class="flex items-center px-4 py-2 rounded-xl border border-gray-100 hover:bg-blue-50 cursor-pointer transition-all bg-gray-50 group">
-                                                <input type="radio" name="analysis-method" value="area" class="w-4 h-4 text-blue-600">
+                                                <input type="radio" name="method-category" value="area" onchange="onMethodCategoryChange()" class="w-4 h-4 text-blue-600">
                                                 <div class="ml-3">
                                                     <span class="block text-xs font-bold text-gray-700">Integral</span>
                                                     <span class="block text-[9px] text-gray-400 group-hover:text-blue-400">Peak Area</span>
                                                 </div>
+                                            </label>
+                                        </div>
+                                        <!-- Intensity sub-options (hidden when Integral selected) -->
+                                        <div id="intensity-suboptions" class="flex gap-2 pl-1 transition-all duration-200">
+                                            <label class="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-gray-100 hover:bg-blue-50 cursor-pointer transition-all bg-white group text-[10px]">
+                                                <input type="radio" name="intensity-submethod" value="intensity_max" checked class="w-3 h-3 text-blue-600">
+                                                <span class="font-bold text-gray-600 group-hover:text-blue-600">Peak Max</span>
+                                            </label>
+                                            <label class="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-gray-100 hover:bg-blue-50 cursor-pointer transition-all bg-white group text-[10px]">
+                                                <input type="radio" name="intensity-submethod" value="intensity_exact" class="w-3 h-3 text-blue-600">
+                                                <span class="font-bold text-gray-600 group-hover:text-blue-600">Exact PPM</span>
+                                            </label>
+                                            <label class="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-gray-100 hover:bg-purple-50 cursor-pointer transition-all bg-white group text-[10px]">
+                                                <input type="radio" name="intensity-submethod" value="intensity_fit" class="w-3 h-3 text-purple-600">
+                                                <span class="font-bold text-gray-600 group-hover:text-purple-600">Fitted Peak</span>
                                             </label>
                                         </div>
                                     </div>
@@ -371,6 +387,30 @@
                                     <div class="bg-white rounded-3xl border border-gray-100 overflow-hidden">
                                         <div id="plot-verification" class="w-full h-[450px]"></div>
                                     </div>
+                                    <!-- Fit Info Panel -->
+                                    <div id="fit-info-panel" class="hidden mt-4 bg-gray-50 rounded-2xl border border-gray-200 p-5">
+                                        <h4 class="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-3">Deconvolution Fit Details</h4>
+                                        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+                                            <div class="bg-white rounded-xl p-3 border border-gray-100">
+                                                <div class="text-[9px] uppercase text-gray-400 mb-1">Best Model</div>
+                                                <div id="fit-info-type" class="text-sm font-bold text-blue-700">—</div>
+                                            </div>
+                                            <div class="bg-white rounded-xl p-3 border border-gray-100">
+                                                <div class="text-[9px] uppercase text-gray-400 mb-1">R² (Best)</div>
+                                                <div id="fit-info-r2" class="text-sm font-bold text-green-600">—</div>
+                                            </div>
+                                            <div class="bg-white rounded-xl p-3 border border-gray-100">
+                                                <div class="text-[9px] uppercase text-gray-400 mb-1">FWHM (ppm)</div>
+                                                <div id="fit-info-fwhm" class="text-sm font-bold text-gray-700">—</div>
+                                            </div>
+                                            <div class="bg-white rounded-xl p-3 border border-gray-100">
+                                                <div class="text-[9px] uppercase text-gray-400 mb-1">Center (ppm)</div>
+                                                <div id="fit-info-center" class="text-sm font-bold text-gray-700">—</div>
+                                            </div>
+                                        </div>
+                                        <div class="text-[9px] uppercase text-gray-400 mb-2">All Model R² Comparison</div>
+                                        <div id="fit-info-all-r2" class="flex flex-wrap gap-2"></div>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -398,12 +438,31 @@
 
     <script>
         let currentNmrData = null;
+        let currentDataId = null;
         let lastAnalysisResult = null;
         let calibrations = [];
         let selectedCalibration = null;
         let selectedPeaks = []; // Unified selection location
         let currentSliceIndex = 0;
         let omittedSlices = [];
+
+        function getSelectedMethod() {
+            const category = document.querySelector('input[name="method-category"]:checked')?.value || 'intensity';
+            if (category === 'area') return 'area';
+            return document.querySelector('input[name="intensity-submethod"]:checked')?.value || 'intensity_max';
+        }
+
+        function onMethodCategoryChange() {
+            const category = document.querySelector('input[name="method-category"]:checked')?.value;
+            const sub = document.getElementById('intensity-suboptions');
+            if (category === 'area') {
+                sub.style.opacity = '0';
+                sub.style.pointerEvents = 'none';
+            } else {
+                sub.style.opacity = '1';
+                sub.style.pointerEvents = '';
+            }
+        }
 
         function showNewCalibration() {
             document.getElementById('calib-choice').classList.add('hidden');
@@ -539,6 +598,7 @@
                     alert('Error processing file: ' + data.error);
                 } else {
                     currentNmrData = data.plot_data;
+                    currentDataId = data.data_id || null;
                     
                     if (datasetType === 'standard') {
                         // Show Step 2 container now that data is loaded
@@ -775,6 +835,41 @@
             };
 
             Plotly.newPlot('plot-verification', traces, layout, { responsive: true, displayModeBar: false });
+
+            // --- Update Fit Info Panel ---
+            // Use the first selected peak's fit data for the current slice
+            const fitInfoPanel = document.getElementById('fit-info-panel');
+            if (lastAnalysisResult && lastAnalysisResult.results && lastAnalysisResult.results[0]) {
+                const fitData = lastAnalysisResult.results[0].peak_fits
+                              ? lastAnalysisResult.results[0].peak_fits[currentSliceIndex]
+                              : null;
+                if (fitData && fitData.fit_type) {
+                    fitInfoPanel.classList.remove('hidden');
+                    document.getElementById('fit-info-type').textContent = fitData.fit_type;
+                    document.getElementById('fit-info-r2').textContent   = fitData.r2 !== null ? fitData.r2.toFixed(4) : 'N/A';
+                    document.getElementById('fit-info-fwhm').textContent = fitData.fwhm_ppm !== null ? fitData.fwhm_ppm.toFixed(5) : 'N/A';
+                    document.getElementById('fit-info-center').textContent = fitData.center_ppm !== null ? fitData.center_ppm.toFixed(4) : 'N/A';
+
+                    // Model comparison badges
+                    const allR2 = fitData.all_r2 || {};
+                    const allR2El = document.getElementById('fit-info-all-r2');
+                    allR2El.innerHTML = '';
+                    const colors = { 'Lorentzian': 'bg-blue-100 text-blue-800 border-blue-200',
+                                     'Gaussian':   'bg-purple-100 text-purple-800 border-purple-200',
+                                     'Pseudo-Voigt': 'bg-orange-100 text-orange-800 border-orange-200' };
+                    Object.entries(allR2).forEach(([name, r2]) => {
+                        const isBest = name === fitData.fit_type;
+                        const cls = colors[name] || 'bg-gray-100 text-gray-700 border-gray-200';
+                        allR2El.innerHTML += `<span class="px-3 py-1.5 rounded-lg border text-[10px] font-bold ${cls} ${isBest ? 'ring-2 ring-offset-1 ring-current' : ''}">
+                            ${name}: R²&nbsp;=&nbsp;${r2.toFixed(4)}${isBest ? ' ✓' : ''}
+                        </span>`;
+                    });
+                } else {
+                    fitInfoPanel.classList.add('hidden');
+                }
+            } else {
+                fitInfoPanel.classList.add('hidden');
+            }
         }
 
         function closeVerification() {
@@ -788,6 +883,11 @@
             updateVerificationPlot();
         }
 
+        function recalculateFit() {
+            console.log("Recalculating fit with omitted slices:", omittedSlices);
+            document.getElementById('btn-run-analysis').click();
+        }
+
         function toggleSliceOmission() {
             const isChecked = document.getElementById('check-omit-slice').checked;
             if (isChecked) {
@@ -795,11 +895,10 @@
             } else {
                 omittedSlices = omittedSlices.filter(i => i !== currentSliceIndex);
             }
-            document.getElementById('btn-recalculate').classList.toggle('hidden', omittedSlices.length === 0);
-        }
-
-        function recalculateFit() {
-            document.getElementById('btn-run-analysis').click();
+            updateVerificationPlot();
+            
+            // Show the recalculate button if changes made
+            document.getElementById('btn-recalculate').classList.remove('hidden');
         }
 
         function handleCalibrationPeakClick(clickData) {
@@ -937,14 +1036,16 @@
             btn.disabled = true;
             btn.innerHTML = `<i class="fas fa-spinner fa-spin mr-2"></i> Analyzing Peaks...`;
 
-            const method = document.querySelector('input[name="analysis-method"]:checked').value;
+            const method = getSelectedMethod();
             const payload = {
                 peaks: selectedPeaks.map(p => parseFloat(p)),
                 method: method,
                 calibration_id: selectedCalibration.id,
-                nmr_data: currentNmrData,
+                data_id: currentDataId,
                 omitted_slices: omittedSlices
             };
+
+            console.log("Payload Size (check):", JSON.stringify(payload).length);
 
             fetch('/analyze_diffusion', {
                 method: 'POST',
@@ -957,19 +1058,23 @@
                 btn.textContent = originalText;
                 
                 if (data.error) {
-                    alert(data.error);
+                    console.error("Server Analysis Error:", data.error);
+                    alert("Analysis Error: " + data.error);
                 } else {
-                    displayDiffusionResults(data);
+                    lastAnalysisResult = data;
+                    displayDiffusionResults(data, method);
                 }
             })
             .catch(err => {
                 btn.disabled = false;
                 btn.textContent = originalText;
-                alert("Analysis failed. Check console.");
+                console.error("Fetch Error:", err);
+                alert("Fetch failed. Check browser console.");
             });
         });
 
-        function displayDiffusionResults(data) {
+        function displayDiffusionResults(data, method) {
+            if (!method) method = getSelectedMethod();
             document.getElementById('analysis-results-placeholder').classList.add('hidden');
             document.getElementById('analysis-plots-container').classList.remove('hidden');
 
