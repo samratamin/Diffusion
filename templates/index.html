@@ -226,13 +226,107 @@
                 </div>
             </div>
 
+            <!-- Processing Wizard (Phase + Baseline — shown after sample upload, before peak selection) -->
+            <div id="processing-wizard" class="hidden mt-6">
+                <!-- Step progress -->
+                <div class="flex items-center gap-3 mb-5 px-1">
+                    <div id="wizard-badge-1" class="w-7 h-7 rounded-full flex items-center justify-center text-xs font-black bg-blue-600 text-white">1</div>
+                    <span id="wizard-label-1" class="text-[10px] font-black uppercase tracking-widest text-blue-600">Phase Correction</span>
+                    <div class="flex-1 h-px bg-gray-200"></div>
+                    <div id="wizard-badge-2" class="w-7 h-7 rounded-full flex items-center justify-center text-xs font-black bg-gray-200 text-gray-400">2</div>
+                    <span id="wizard-label-2" class="text-[10px] font-black uppercase tracking-widest text-gray-400">Baseline</span>
+                    <div class="flex-1 h-px bg-gray-200"></div>
+                    <div id="wizard-badge-3" class="w-7 h-7 rounded-full flex items-center justify-center text-xs font-black bg-gray-200 text-gray-400">3</div>
+                    <span id="wizard-label-3" class="text-[10px] font-black uppercase tracking-widest text-gray-400">Peak Selection</span>
+                </div>
+
+                <!-- Step 1: Phase Correction -->
+                <div id="proc-step-1" class="bg-white rounded-3xl border border-gray-200 p-6 shadow-sm">
+                    <div class="flex justify-between items-start mb-4">
+                        <div>
+                            <h3 class="text-xl font-bold text-gray-800">Phase Correction</h3>
+                            <p class="text-xs text-gray-400 mt-1 max-w-xl">Raw FID data is loaded and Fourier transformed. Use sliders to rotate the complex spectrum so peaks appear as positive absorptive lines — this is critical for accurate baseline and area integration.</p>
+                        </div>
+                        <button onclick="autoPhaseSpectrum()" id="btn-auto-phase" class="ml-4 px-4 py-2 bg-purple-600 text-white text-[10px] font-black uppercase tracking-widest rounded-xl hover:bg-purple-700 shadow-sm transition-all whitespace-nowrap">
+                            ⚡ Auto Phase
+                        </button>
+                    </div>
+                    <div id="plot-phase-preview" class="w-full h-[320px] bg-gray-50 rounded-2xl border border-dashed border-gray-200 mb-5"></div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-4">
+                        <div>
+                            <label class="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">
+                                0th Order (ph0) — Constant Phase: <span id="ph0-value" class="text-blue-600 font-mono">0.0</span>°
+                            </label>
+                            <input type="range" id="ph0-slider" min="-180" max="180" step="0.5" value="0"
+                                oninput="onPhaseSliderChange()" class="w-full accent-blue-600 h-2 cursor-pointer">
+                        </div>
+                        <div>
+                            <label class="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">
+                                1st Order (ph1) — Frequency Dependent: <span id="ph1-value" class="text-blue-600 font-mono">0.0</span>°
+                            </label>
+                            <input type="range" id="ph1-slider" min="-1080" max="1080" step="1" value="0"
+                                oninput="onPhaseSliderChange()" class="w-full accent-blue-600 h-2 cursor-pointer">
+                        </div>
+                    </div>
+                    <div class="flex flex-wrap items-center gap-4 mt-3 pt-3 border-t border-gray-100">
+                        <div class="flex items-center gap-2">
+                            <label class="text-[10px] font-black uppercase tracking-widest text-gray-400">Pivot PPM:</label>
+                            <input type="number" id="pivot-ppm" placeholder="auto (center)" step="0.1"
+                                class="w-36 border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:border-blue-400">
+                        </div>
+                        <button onclick="resetPhase()" class="text-[10px] font-bold text-gray-400 hover:text-gray-600 underline">Reset</button>
+                        <div class="ml-auto flex items-center gap-3">
+                            <button onclick="skipProcessing()" class="text-[10px] font-bold text-gray-400 hover:text-gray-600 underline">Skip (use magnitude)</button>
+                            <button onclick="wizardGoToStep(2)" class="px-6 py-2.5 bg-blue-600 text-white text-[10px] font-black uppercase tracking-widest rounded-xl hover:bg-blue-700 shadow-sm transition-all">
+                                Next: Baseline →
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Step 2: Baseline Correction -->
+                <div id="proc-step-2" class="hidden bg-white rounded-3xl border border-gray-200 p-6 shadow-sm">
+                    <div class="mb-4">
+                        <h3 class="text-xl font-bold text-gray-800">Baseline Correction</h3>
+                        <p class="text-xs text-gray-400 mt-1 max-w-xl">Remove residual baseline drift from the phased spectrum. The baseline is auto-estimated from spectral regions below 5% of the peak maximum and subtracted.</p>
+                    </div>
+                    <div id="plot-baseline-preview" class="w-full h-[320px] bg-gray-50 rounded-2xl border border-dashed border-gray-200 mb-5"></div>
+                    <div class="flex flex-wrap items-center gap-6 pt-3 border-t border-gray-100">
+                        <div>
+                            <label class="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">Baseline Method</label>
+                            <div class="flex gap-2">
+                                <label class="flex items-center gap-2 px-3 py-1.5 rounded-lg border text-[10px] font-bold cursor-pointer bg-white border-gray-200 hover:bg-blue-50">
+                                    <input type="radio" name="baseline-method" value="-1" checked onchange="updateBaselinePreview()"> None
+                                </label>
+                                <label class="flex items-center gap-2 px-3 py-1.5 rounded-lg border text-[10px] font-bold cursor-pointer bg-white border-gray-200 hover:bg-blue-50">
+                                    <input type="radio" name="baseline-method" value="0" onchange="updateBaselinePreview()"> Constant
+                                </label>
+                                <label class="flex items-center gap-2 px-3 py-1.5 rounded-lg border text-[10px] font-bold cursor-pointer bg-white border-gray-200 hover:bg-blue-50">
+                                    <input type="radio" name="baseline-method" value="1" onchange="updateBaselinePreview()"> Linear
+                                </label>
+                                <label class="flex items-center gap-2 px-3 py-1.5 rounded-lg border text-[10px] font-bold cursor-pointer bg-white border-gray-200 hover:bg-blue-50">
+                                    <input type="radio" name="baseline-method" value="2" onchange="updateBaselinePreview()"> Polynomial
+                                </label>
+                            </div>
+                        </div>
+                        <div class="ml-auto flex items-center gap-3">
+                            <button onclick="wizardGoToStep(1)" class="text-[10px] font-bold text-gray-400 hover:text-gray-600">← Back</button>
+                            <button onclick="applyProcessingAndContinue()" id="btn-apply-processing"
+                                class="px-6 py-2.5 bg-green-600 text-white text-[10px] font-black uppercase tracking-widest rounded-xl hover:bg-green-700 shadow-sm transition-all">
+                                Apply &amp; Select Peaks →
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <!-- Analysis Workspace (Hidden until upload) -->
             <div id="analysis-workspace" class="hidden space-y-8 mt-12">
                 <div class="p-8 bg-white border border-gray-200 rounded-3xl shadow-sm overflow-hidden">
                     <div class="flex justify-between items-end mb-6">
                         <div>
-                            <h3 class="text-2xl font-bold text-gray-800">Peak Selection List</h3>
-                            <p class="text-sm text-gray-500 font-medium italic">Click peaks in the spectra above or select from the auto-detected list.</p>
+                            <h3 class="text-2xl font-bold text-gray-800">Peak Selection</h3>
+                            <p class="text-sm text-gray-500 font-medium italic">Left-click to select a peak &middot; Right-click on the spectrum to remove a peak.</p>
                         </div>
                     </div>
                     
@@ -464,6 +558,301 @@
             }
         }
 
+        // ============================================================
+        // Processing Wizard
+        // ============================================================
+        let currentWizardStep = 1;
+
+        function showProcessingWizard() {
+            // Reset controls
+            document.getElementById('ph0-slider').value = 0;
+            document.getElementById('ph1-slider').value = 0;
+            document.getElementById('ph0-value').textContent = '0.0';
+            document.getElementById('ph1-value').textContent = '0.0';
+            document.getElementById('pivot-ppm').value = '';
+            const noneRadio = document.querySelector('input[name="baseline-method"][value="-1"]');
+            if (noneRadio) noneRadio.checked = true;
+
+            // Show wizard step 1
+            currentWizardStep = 1;
+            document.getElementById('proc-step-1').classList.remove('hidden');
+            document.getElementById('proc-step-2').classList.add('hidden');
+            document.getElementById('processing-wizard').classList.remove('hidden');
+            document.getElementById('analysis-workspace').classList.add('hidden');
+
+            // Initial preview (magnitude-equivalent at ph0=0)
+            updatePhasePreview();
+        }
+
+        function wizardGoToStep(step) {
+            document.getElementById(`proc-step-${currentWizardStep}`).classList.add('hidden');
+            currentWizardStep = step;
+            document.getElementById(`proc-step-${step}`).classList.remove('hidden');
+
+            // Update step indicator badges
+            [1, 2, 3].forEach(i => {
+                const badge = document.getElementById(`wizard-badge-${i}`);
+                const label = document.getElementById(`wizard-label-${i}`);
+                if (i < step) {
+                    badge.className = 'w-7 h-7 rounded-full flex items-center justify-center text-xs font-black bg-green-500 text-white';
+                    label.className = 'text-[10px] font-black uppercase tracking-widest text-green-600';
+                } else if (i === step) {
+                    badge.className = 'w-7 h-7 rounded-full flex items-center justify-center text-xs font-black bg-blue-600 text-white';
+                    label.className = 'text-[10px] font-black uppercase tracking-widest text-blue-600';
+                } else {
+                    badge.className = 'w-7 h-7 rounded-full flex items-center justify-center text-xs font-black bg-gray-200 text-gray-400';
+                    label.className = 'text-[10px] font-black uppercase tracking-widest text-gray-400';
+                }
+            });
+
+            if (step === 2) {
+                // Immediately render phased spectrum (no freeze)
+                const _ph0 = parseFloat(document.getElementById('ph0-slider').value);
+                const _ph1 = parseFloat(document.getElementById('ph1-slider').value);
+                const _pv  = document.getElementById('pivot-ppm').value;
+                const _instant = applyPhaseJS(_ph0, _ph1, _pv ? parseFloat(_pv) : null);
+                if (_instant) renderBaselinePlot('plot-baseline-preview', _instant.spectrum, null, _instant.ppm);
+                updateBaselinePreview();
+            }
+        }
+
+        // Apply phase correction to the first slice only — pure client-side, zero server round-trips.
+        // Uses full-resolution complex_re_0/complex_im_0 sent at upload time.
+        function applyPhaseJS(ph0_deg, ph1_deg, pivot_ppm) {
+            if (!currentNmrData) return null;
+            const re = currentNmrData.complex_re_0 || (currentNmrData.complex_re && currentNmrData.complex_re[0]);
+            const im = currentNmrData.complex_im_0 || (currentNmrData.complex_im && currentNmrData.complex_im[0]);
+            const ppm = currentNmrData.complex_ppm || currentNmrData.raw_ppm;
+            if (!re || !im) return null;
+
+            const n_pts = re.length;
+            const ph0 = ph0_deg * Math.PI / 180;
+            const ph1 = ph1_deg * Math.PI / 180;
+
+            // Default pivot: ppm midpoint of the spectrum (not array midpoint)
+            let pivotIdx = Math.floor(n_pts / 2);
+            if (pivot_ppm !== null && pivot_ppm !== undefined && ppm && ppm.length > 0) {
+                let minDiff = Infinity;
+                for (let i = 0; i < ppm.length; i++) {
+                    const d = Math.abs(ppm[i] - pivot_ppm);
+                    if (d < minDiff) { minDiff = d; pivotIdx = i; }
+                }
+            } else if (ppm && ppm.length > 1) {
+                // Use spectral ppm midpoint as default pivot
+                const midPpm = (ppm[0] + ppm[ppm.length - 1]) / 2;
+                let minDiff = Infinity;
+                for (let i = 0; i < ppm.length; i++) {
+                    const d = Math.abs(ppm[i] - midPpm);
+                    if (d < minDiff) { minDiff = d; pivotIdx = i; }
+                }
+            }
+
+            const out = new Array(n_pts);
+            for (let i = 0; i < n_pts; i++) {
+                const angle = ph0 + ph1 * (i - pivotIdx) / n_pts;
+                out[i] = re[i] * Math.cos(angle) - im[i] * Math.sin(angle);
+            }
+
+            // Normalize by absolute max
+            let absMax = 0;
+            for (let i = 0; i < n_pts; i++) { const v = Math.abs(out[i]); if (v > absMax) absMax = v; }
+            if (absMax > 0) for (let i = 0; i < n_pts; i++) out[i] /= absMax;
+
+            return { spectrum: out, ppm };
+        }
+
+        function onPhaseSliderChange() {
+            const ph0 = parseFloat(document.getElementById('ph0-slider').value);
+            const ph1 = parseFloat(document.getElementById('ph1-slider').value);
+            document.getElementById('ph0-value').textContent = ph0.toFixed(1);
+            document.getElementById('ph1-value').textContent = ph1.toFixed(1);
+            updatePhasePreview();
+        }
+
+        function updatePhasePreview() {
+            const ph0 = parseFloat(document.getElementById('ph0-slider').value);
+            const ph1 = parseFloat(document.getElementById('ph1-slider').value);
+            const pivotVal = document.getElementById('pivot-ppm').value;
+            const pivot = pivotVal ? parseFloat(pivotVal) : null;
+
+            // Use fast client-side math if complex spectra are available (first slice, full resolution)
+            if (currentNmrData && (currentNmrData.complex_re_0 || currentNmrData.complex_re)) {
+                const result = applyPhaseJS(ph0, ph1, pivot);
+                if (result) renderWizardPlot('plot-phase-preview', [result.spectrum], result.ppm);
+                return;
+            }
+
+            // Fallback: server round-trip
+            if (!currentDataId) return;
+            fetch('/phase_spectrum', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ data_id: currentDataId, ph0, ph1, pivot_ppm: pivot })
+            })
+            .then(r => r.json())
+            .then(d => { if (d.phased_spectra) renderWizardPlot('plot-phase-preview', [d.phased_spectra[0]], d.ppm); })
+            .catch(e => console.error('Phase preview error:', e));
+        }
+
+        function renderWizardPlot(divId, spectra, ppm) {
+            // Phase preview: show only slice 0 at full resolution
+            const sp = spectra[0];
+            const traces = [{ x: ppm, y: sp, type: 'scatter', mode: 'lines',
+                line: { width: 1.2, color: '#2563eb' }, name: 'Slice 1', showlegend: false }];
+            Plotly.react(divId, traces, {
+                title: false, margin: { l: 55, r: 15, t: 10, b: 40 },
+                xaxis: { title: 'PPM', autorange: 'reversed', gridcolor: '#f3f4f6', zeroline: false },
+                yaxis: { gridcolor: '#f3f4f6', zeroline: true, zerolinecolor: '#6b7280', zerolinewidth: 1.5 },
+                paper_bgcolor: '#f9fafb', plot_bgcolor: '#f9fafb'
+            }, { responsive: true, displayModeBar: false });
+        }
+
+        async function autoPhaseSpectrum() {
+            if (!currentDataId) return;
+            const btn = document.getElementById('btn-auto-phase');
+            const origHtml = btn.innerHTML;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i> Phasing...';
+            btn.disabled = true;
+            try {
+                const pivotVal = document.getElementById('pivot-ppm').value;
+                const r = await fetch('/auto_phase', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ data_id: currentDataId,
+                        pivot_ppm: pivotVal ? parseFloat(pivotVal) : null })
+                });
+                const d = await r.json();
+                if (d.ph0 !== undefined) {
+                    document.getElementById('ph0-slider').value = d.ph0;
+                    document.getElementById('ph1-slider').value = d.ph1 || 0;
+                    document.getElementById('ph0-value').textContent = d.ph0.toFixed(1);
+                    document.getElementById('ph1-value').textContent = (d.ph1 || 0).toFixed(1);
+                    // Set pivot to the dominant peak ppm returned by auto-phase
+                    if (d.pivot_ppm !== null && d.pivot_ppm !== undefined) {
+                        document.getElementById('pivot-ppm').value = d.pivot_ppm.toFixed(3);
+                    }
+                    updatePhasePreview();  // instant via client-side JS
+                }
+            } catch (e) { console.error('Auto-phase error:', e); }
+            finally { btn.innerHTML = origHtml; btn.disabled = false; }
+        }
+
+        function resetPhase() {
+            document.getElementById('ph0-slider').value = 0;
+            document.getElementById('ph1-slider').value = 0;
+            document.getElementById('ph0-value').textContent = '0.0';
+            document.getElementById('ph1-value').textContent = '0.0';
+            document.getElementById('pivot-ppm').value = '';
+            updatePhasePreview();
+        }
+
+        function renderBaselinePlot(divId, spectrum, baseline, ppm) {
+            const traces = [{
+                x: ppm, y: spectrum, type: 'scatter', mode: 'lines',
+                line: { width: 1.2, color: '#2563eb' }, name: 'Spectrum', showlegend: !!baseline
+            }];
+            if (baseline) {
+                traces.push({
+                    x: ppm, y: baseline, type: 'scatter', mode: 'lines',
+                    line: { width: 2, color: '#ef4444', dash: 'dash' },
+                    name: 'Estimated Baseline', showlegend: true
+                });
+            }
+            Plotly.react(divId, traces, {
+                title: false, margin: { l: 55, r: 15, t: 10, b: 40 },
+                xaxis: { title: 'PPM', autorange: 'reversed', gridcolor: '#f3f4f6', zeroline: false },
+                yaxis: { gridcolor: '#f3f4f6', zeroline: true, zerolinecolor: '#6b7280', zerolinewidth: 1.5 },
+                paper_bgcolor: '#f9fafb', plot_bgcolor: '#f9fafb',
+                showlegend: !!baseline,
+                legend: { x: 0.01, y: 0.99, bgcolor: 'rgba(255,255,255,0.8)',
+                          font: { size: 10 }, orientation: 'h' }
+            }, { responsive: true, displayModeBar: false });
+        }
+
+        function updateBaselinePreview() {
+            const ph0 = parseFloat(document.getElementById('ph0-slider').value);
+            const ph1 = parseFloat(document.getElementById('ph1-slider').value);
+            const pivotVal = document.getElementById('pivot-ppm').value;
+            const pivot = pivotVal ? parseFloat(pivotVal) : null;
+            const baselineOrder = parseInt(
+                document.querySelector('input[name="baseline-method"]:checked')?.value ?? '-1');
+
+            // Always show the phased spectrum immediately (client-side, no wait)
+            const instant = applyPhaseJS(ph0, ph1, pivot);
+
+            if (baselineOrder === -1 || !currentDataId) {
+                // "None" — just show the phased spectrum, no baseline overlay
+                if (instant) renderBaselinePlot('plot-baseline-preview', instant.spectrum, null,
+                                               instant.ppm);
+                return;
+            }
+
+            // Render spectrum immediately, then overlay baseline when server responds
+            if (instant) renderBaselinePlot('plot-baseline-preview', instant.spectrum, null, instant.ppm);
+
+            fetch('/apply_processing', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ data_id: currentDataId, ph0, ph1,
+                    pivot_ppm: pivot, baseline_order: baselineOrder, preview: true })
+            })
+            .then(r => r.json())
+            .then(d => {
+                if (instant && d.baseline_0) {
+                    renderBaselinePlot('plot-baseline-preview', instant.spectrum, d.baseline_0,
+                                      instant.ppm);
+                }
+            })
+            .catch(e => console.error('Baseline preview error:', e));
+        }
+
+        async function applyProcessingAndContinue() {
+            if (!currentDataId) return;
+            const ph0 = parseFloat(document.getElementById('ph0-slider').value);
+            const ph1 = parseFloat(document.getElementById('ph1-slider').value);
+            const pivotVal = document.getElementById('pivot-ppm').value;
+            const baselineOrder = parseInt(
+                document.querySelector('input[name="baseline-method"]:checked')?.value ?? '-1');
+            const btn = document.getElementById('btn-apply-processing');
+            const origHtml = btn.innerHTML;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i> Applying...';
+            btn.disabled = true;
+            try {
+                const r = await fetch('/apply_processing', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ data_id: currentDataId, ph0, ph1,
+                        pivot_ppm: pivotVal ? parseFloat(pivotVal) : null,
+                        baseline_order: baselineOrder })
+                });
+                const d = await r.json();
+                if (d.error) { alert(d.error); return; }
+                // Update currentNmrData with processed spectra
+                currentNmrData.raw_spectra = d.raw_spectra;
+                currentNmrData.raw_ppm = d.ppm;
+                currentNmrData.selection_data = [{
+                    x: d.ppm, y: d.raw_spectra[0],
+                    type: 'scatter', mode: 'lines', name: 'Slice 1 (Processed)',
+                    line: { color: '#2563eb', width: 1.5 }
+                }];
+                _proceedToAnalysis();
+            } catch (e) {
+                console.error('Apply processing error:', e);
+                alert('Processing failed. Check browser console.');
+            } finally { btn.innerHTML = origHtml; btn.disabled = false; }
+        }
+
+        function skipProcessing() {
+            // Use magnitude spectra as-is (legacy behaviour)
+            _proceedToAnalysis();
+        }
+
+        function _proceedToAnalysis() {
+            document.getElementById('processing-wizard').classList.add('hidden');
+            document.getElementById('analysis-workspace').classList.remove('hidden');
+            renderSelectionPlot('plot-selection-analysis-top', currentNmrData, handleAnalysisPeakClick);
+        }
+
         function showNewCalibration() {
             document.getElementById('calib-choice').classList.add('hidden');
             document.getElementById('calib-new-panel').classList.remove('hidden');
@@ -495,6 +884,7 @@
         function resetAnalysisUpload() {
             document.getElementById('analysis-upload-area').classList.remove('hidden');
             document.getElementById('analysis-verification-area').classList.add('hidden');
+            document.getElementById('processing-wizard').classList.add('hidden');
             document.getElementById('analysis-workspace').classList.add('hidden');
             document.getElementById('analysis-controls').classList.add('hidden');
             
@@ -620,14 +1010,11 @@
                         document.getElementById('calib-workspace').classList.remove('hidden');
                         renderSelectionPlot('plot-selection', data.plot_data, handleCalibrationPeakClick);
                     } else {
-                        // Swap: Hide upload box, show plot in its place
+                        // Swap: Hide upload box, show stacked plot + processing wizard
                         document.getElementById('analysis-upload-area').classList.add('hidden');
                         document.getElementById('analysis-verification-area').classList.remove('hidden');
-                        
                         renderStackedPlot('plot-stacked-sample', data.plot_data.stacked_data);
-
-                        document.getElementById('analysis-workspace').classList.remove('hidden');
-                        renderSelectionPlot('plot-selection-analysis-top', data.plot_data, handleAnalysisPeakClick);
+                        showProcessingWizard();
                     }
                 }
             });
@@ -721,6 +1108,31 @@
             const config = { responsive: true, displayModeBar: false };
             Plotly.newPlot(divId, plotData.selection_data || document.getElementById(divId).data, layout, config);
             document.getElementById(divId).on('plotly_click', callback);
+            // Right-click on the plot deselects the nearest peak
+            document.getElementById(divId).addEventListener('contextmenu', function(evt) {
+                evt.preventDefault();
+                const plotEl = document.getElementById(divId);
+                if (!plotEl._fullLayout) return;
+                // Estimate ppm from mouse X position via xaxis range
+                const xaxis = plotEl._fullLayout.xaxis;
+                const rect = plotEl.getBoundingClientRect();
+                const marginL = plotEl._fullLayout.margin.l;
+                const marginR = plotEl._fullLayout.margin.r;
+                const plotW = rect.width - marginL - marginR;
+                const relX = evt.clientX - rect.left - marginL;
+                if (plotW <= 0) return;
+                const frac = relX / plotW;
+                // xaxis is reversed
+                const ppmClick = xaxis.range[0] + frac * (xaxis.range[1] - xaxis.range[0]);
+                if (selectedPeaks.length === 0) return;
+                // Remove the closest selected peak within 0.2 ppm
+                let closest = null, minD = 0.2;
+                selectedPeaks.forEach(p => {
+                    const d = Math.abs(parseFloat(p) - ppmClick);
+                    if (d < minD) { minD = d; closest = p; }
+                });
+                if (closest !== null) removePeak(closest);
+            });
         }
 
         function showVerification() {
@@ -1018,9 +1430,7 @@
         function removePeak(ppm) {
             selectedPeaks = selectedPeaks.filter(p => p !== ppm);
             updatePeakChips();
-            // Refresh main selection plot to update highlights
             renderSelectionPlot('plot-selection-analysis-top', { selection_data: document.getElementById('plot-selection-analysis-top').data }, handleAnalysisPeakClick);
-
             if (selectedPeaks.length === 0) {
                 document.getElementById('analysis-controls').classList.add('hidden');
             }

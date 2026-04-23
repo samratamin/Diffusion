@@ -8,7 +8,7 @@ import plotly.graph_objects as go
 import numpy as np
 import json
 import sqlite3
-from scipy.optimize import curve_fit
+from scipy.optimize import curve_fit, minimize_scalar, minimize
 import uuid
 
 # In-memory store for uploaded NMR datasets, keyed by session UUID
@@ -23,8 +23,10 @@ def safe_float(v, fallback=0.0):
         return fallback
 
 def safe_list(lst, fallback=0.0):
-    """Return a list of JSON-safe floats."""
-    return [safe_float(v, fallback) for v in lst]
+    """Return a list of JSON-safe floats. Uses numpy for performance on large arrays."""
+    a = np.asarray(lst, dtype=np.float64)
+    a = np.where(np.isfinite(a), a, fallback)
+    return a.tolist()
 
 # SQLite Configuration
 DB_FILE = 'nmr_diffusion.db'
@@ -497,13 +499,193 @@ def upload_file():
             
             data_id = str(uuid.uuid4())
             _nmr_data_store[data_id] = plot_data
-            return jsonify({'message': 'File successfully uploaded and extracted', 'plot_data': plot_data, 'data_id': data_id})
+            # Strip server-only keys (complex spectra) before sending to browser
+            response_plot_data = {k: v for k, v in plot_data.items() if not k.startswith('_')}
+
+            # Send first slice at full resolution for real-time client-side phase correction
+            if '_complex_spectra' in plot_data and plot_data['_complex_spectra']:
+                sp0 = plot_data['_complex_spectra'][0]
+                ppm_arr = np.array(plot_data.get('raw_ppm', []))
+                response_plot_data['complex_re_0'] = [float(v) for v in np.real(sp0)]
+                response_plot_data['complex_im_0'] = [float(v) for v in np.imag(sp0)]
+                response_plot_data['complex_ppm'] = ppm_arr.tolist()
+
+            return jsonify({'message': 'File successfully uploaded and extracted', 'plot_data': response_plot_data, 'data_id': data_id})
         except Exception as e:
             import traceback
             traceback.print_exc()
             return jsonify({'error': f'Failed to process NMR data: {str(e)}'}), 500
 
     return jsonify({'error': 'Invalid file type. Please upload a .zip file'}), 400
+
+
+def _apply_phase(complex_arr, ph0_deg, ph1_deg, ppm, pivot_ppm=None):
+    """Apply 0th and 1st order phase correction to a (n_slices, n_pts) complex array."""
+    n_pts = complex_arr.shape[1]
+    ph0 = np.deg2rad(ph0_deg)
+    ph1 = np.deg2rad(ph1_deg)
+    pivot_idx = int(np.argmin(np.abs(ppm - float(pivot_ppm)))) if pivot_ppm is not None else n_pts // 2
+    freq_axis = (np.arange(n_pts) - pivot_idx) / n_pts
+    phase_vec = ph0 + ph1 * freq_axis
+    return np.real(complex_arr * np.exp(1j * phase_vec[np.newaxis, :]))
+
+
+@app.route('/phase_spectrum', methods=['POST'])
+def phase_spectrum():
+    """Return phase-corrected real spectra for live slider preview."""
+    try:
+        data = request.json
+        data_id   = data.get('data_id')
+        ph0       = float(data.get('ph0', 0.0))
+        ph1       = float(data.get('ph1', 0.0))
+        pivot_ppm = data.get('pivot_ppm')
+
+        plot_data = _nmr_data_store.get(data_id)
+        if not plot_data or '_complex_spectra' not in plot_data:
+            return jsonify({'error': 'Data not found or no complex spectra stored'}), 404
+
+        complex_arr = np.array(plot_data['_complex_spectra'])  # (n_slices, n_pts)
+        ppm = np.array(plot_data['raw_ppm'])
+
+        phased = _apply_phase(complex_arr, ph0, ph1, ppm,
+                              float(pivot_ppm) if pivot_ppm is not None else None)
+        norm = float(np.max(np.abs(phased[0]))) or 1.0
+        phased_norm = phased / norm
+
+        return jsonify({
+            'phased_spectra': [safe_list(sp) for sp in phased_norm],
+            'ppm': ppm.tolist()
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/auto_phase', methods=['POST'])
+def auto_phase():
+    """Find optimal ph0 + ph1 via negative-area minimisation (grid search + 2D Nelder-Mead)."""
+    try:
+        data = request.json
+        data_id = data.get('data_id')
+
+        plot_data = _nmr_data_store.get(data_id)
+        if not plot_data or '_complex_spectra' not in plot_data:
+            return jsonify({'error': 'Data not found'}), 404
+
+        sp0 = np.array(plot_data['_complex_spectra'][0])
+        n_pts = len(sp0)
+
+        # Use the dominant peak as the pivot for ph1 (so ph1 doesn't shift ph0 at the main peak)
+        mag = np.abs(sp0)
+        pivot_idx = int(np.argmax(mag))
+
+        freq_axis = (np.arange(n_pts) - pivot_idx) / n_pts  # normalized, zero at pivot
+
+        def neg_area(ph0_deg, ph1_deg=0.0):
+            phase_vec = np.deg2rad(ph0_deg) + np.deg2rad(ph1_deg) * freq_axis
+            phased = np.real(sp0 * np.exp(1j * phase_vec))
+            return float(np.sum(np.maximum(-phased, 0.0)))
+
+        def neg_area_2d(params):
+            return neg_area(params[0], params[1])
+
+        # Step 1: grid search over ph0 (ph1=0) to find the global basin
+        grid = np.arange(-180.0, 180.0, 2.0)
+        grid_scores = np.array([neg_area(p, 0.0) for p in grid])
+        best_ph0 = float(grid[np.argmin(grid_scores)])
+
+        # Step 2: 2D Nelder-Mead refines both ph0 and ph1 jointly
+        result = minimize(neg_area_2d, [best_ph0, 0.0], method='Nelder-Mead',
+                          options={'xatol': 0.05, 'fatol': 1.0, 'maxiter': 5000,
+                                   'adaptive': True})
+        ph0_best, ph1_best = result.x
+        # Wrap ph0 to [-180, 180]
+        ph0_best = ((ph0_best + 180.0) % 360.0) - 180.0
+        # Clamp ph1 to slider range
+        ph1_best = float(np.clip(ph1_best, -1080.0, 1080.0))
+
+        # Pivot ppm so the browser slider pivot matches what we used
+        ppm_arr = np.array(plot_data.get('raw_ppm', []))
+        pivot_ppm = float(ppm_arr[pivot_idx]) if len(ppm_arr) == n_pts else None
+
+        return jsonify({'ph0': round(ph0_best, 2), 'ph1': round(ph1_best, 2),
+                        'pivot_ppm': round(pivot_ppm, 4) if pivot_ppm is not None else None})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/apply_processing', methods=['POST'])
+def apply_processing():
+    """Apply phase correction + optional polynomial baseline, update stored spectra."""
+    try:
+        data = request.json
+        data_id        = data.get('data_id')
+        ph0            = float(data.get('ph0', 0.0))
+        ph1            = float(data.get('ph1', 0.0))
+        pivot_ppm      = data.get('pivot_ppm')
+        baseline_order = int(data.get('baseline_order', -1))
+        preview        = bool(data.get('preview', False))
+
+        plot_data = _nmr_data_store.get(data_id)
+        if not plot_data or '_complex_spectra' not in plot_data:
+            return jsonify({'error': 'Data not found or complex spectra unavailable'}), 404
+
+        complex_arr = np.array(plot_data['_complex_spectra'])
+        ppm = np.array(plot_data['raw_ppm'])
+
+        # For preview, only process slice 0 (much faster)
+        if preview:
+            complex_arr = complex_arr[:1]
+
+        # Phase correction
+        phased = _apply_phase(complex_arr, ph0, ph1, ppm,
+                              float(pivot_ppm) if pivot_ppm is not None else None)
+
+        # Polynomial baseline correction
+        baseline_0 = None  # baseline curve for first slice (preview overlay)
+        if baseline_order >= 0:
+            corrected = np.zeros_like(phased)
+            n_pts = phased.shape[1]
+            pts_idx = np.arange(n_pts)
+            for i, sp in enumerate(phased):
+                threshold = float(np.max(np.abs(sp))) * 0.05
+                mask = np.abs(sp) < threshold
+                if np.sum(mask) > baseline_order + 1:
+                    coeffs = np.polyfit(pts_idx[mask], sp[mask], baseline_order)
+                    bl = np.polyval(coeffs, pts_idx)
+                    corrected[i] = sp - bl
+                    if i == 0:
+                        baseline_0 = bl
+                else:
+                    corrected[i] = sp
+        else:
+            corrected = phased
+
+        # Normalize to positive max of first slice
+        max_v = float(np.max(corrected[0]))
+        if max_v <= 0:
+            max_v = float(np.max(np.abs(corrected[0])))
+        if max_v == 0:
+            max_v = 1.0
+        corrected_norm = corrected / max_v
+
+        processed_list = [safe_list(sp) for sp in corrected_norm]
+
+        if not preview:
+            # Permanently update stored spectra for subsequent analysis
+            plot_data['raw_spectra'] = processed_list
+            if plot_data.get('selection_data'):
+                plot_data['selection_data'][0]['y'] = processed_list[0]
+
+        response = {'raw_spectra': processed_list, 'ppm': ppm.tolist()}
+        if preview and baseline_0 is not None:
+            # Normalize baseline to the same scale as applyPhaseJS (max(abs(phased[0])))
+            phased_max = float(np.max(np.abs(phased[0]))) or 1.0
+            response['baseline_0'] = safe_list(baseline_0 / phased_max)
+        return jsonify(response)
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
 
 def find_bruker_or_varian(base_dir):
     """Find the actual data directory by looking for Bruker or Varian signatures."""
@@ -649,22 +831,36 @@ def process_nmr_data(extract_dir):
             detected_standard = 'Squalane'
 
     # Calculate magnitude spectra for all slices
-    processed_spectra = []
+    processed_spectra = []  # magnitude for stacked display
+    complex_spectra = []    # complex for server-side phase correction
     for i, trace in enumerate(slices):
-        # 1. Stronger windowing (Exponential, lb=15) to isolate the peak
+        # 1. Exponential apodization (lb=15)
         window = np.exp(-15 * np.arange(len(trace)) / len(trace))
         trace_win = trace * window
 
-        # 2. FT with 4x Zero-filling
+        # 2. FT with 4x zero-filling
         n_fft = len(trace) * 4
         sp = np.fft.fftshift(np.fft.fft(trace_win, n_fft))
         processed_spectra.append(np.abs(sp))
+        complex_spectra.append(sp)  # retain complex for phase correction
 
     # Normalize to the maximum of the FIRST gradient slice
     norm_factor = np.max(processed_spectra[0]) if len(processed_spectra) > 0 and np.max(processed_spectra[0]) > 0 else 1.0
 
-    # Create a consistent ppm base scale
-    ppm_base = np.linspace(15, -5, len(processed_spectra[0]))
+    # Compute ppm axis from Bruker acqus parameters (SW, SFO1, O1)
+    ppm_base = None
+    if vendor == 'bruker':
+        try:
+            sw_ppm = float(dic['acqus']['SW'])
+            sf     = float(dic['acqus']['SFO1'])
+            o1     = float(dic['acqus']['O1'])
+            o1p    = o1 / sf  # Hz / MHz = ppm
+            n_pts  = len(complex_spectra[0])
+            ppm_base = np.linspace(o1p + sw_ppm / 2, o1p - sw_ppm / 2, n_pts)
+        except Exception as ppm_err:
+            print(f'PPM axis from acqus failed: {ppm_err}')
+    if ppm_base is None:
+        ppm_base = np.linspace(15, -5, len(complex_spectra[0]))
 
     traces = []
     for i, sp_mag in enumerate(processed_spectra):
@@ -709,7 +905,7 @@ def process_nmr_data(extract_dir):
     }
 
     return {
-        'stacked_data': traces, 
+        'stacked_data': traces,
         'stacked_layout': layout,
         'selection_data': [selection_trace],
         'raw_ppm': ppm_base.tolist(),
@@ -717,7 +913,8 @@ def process_nmr_data(extract_dir):
         'difflist': difflist,
         'difframp': difframp,
         'exp_params': params,
-        'detected_standard': detected_standard
+        'detected_standard': detected_standard,
+        '_complex_spectra': complex_spectra  # numpy arrays; stripped before browser response
     }
 
 @app.route('/get_calibrations', methods=['GET'])
