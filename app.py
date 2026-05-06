@@ -687,6 +687,84 @@ def apply_processing():
         return jsonify({'error': str(e)}), 500
 
 
+def parse_varian_procpar(procpar_path):
+    """
+    Parse a Varian procpar file into a plain dict: {name: list_of_values}.
+    Used as a fallback when nmrglue does not populate dic['procpar'].
+    Each procpar parameter block has three parts:
+      Line 1: name subtype basictype maxval minval step Ggroup Dgroup protection
+      Line 2+: count val1 val2 ... valN  (may span multiple physical lines)
+      Line 3: enum_count  [optional enum values]
+    """
+    result = {}
+    try:
+        with open(procpar_path, 'r') as f:
+            lines = f.readlines()
+        i = 0
+        while i < len(lines):
+            if not lines[i].strip():
+                i += 1
+                continue
+            # --- descriptor line ---
+            parts = lines[i].strip().split()
+            if len(parts) < 3:
+                i += 1
+                continue
+            name = parts[0]
+            try:
+                basictype = int(parts[2])   # 1 = real, 2 = string
+            except (ValueError, IndexError):
+                basictype = 1
+            i += 1
+            if i >= len(lines):
+                break
+            # --- values line(s) ---
+            val_parts = lines[i].strip().split()
+            i += 1
+            if not val_parts:
+                # skip enum line if present
+                if i < len(lines):
+                    i += 1
+                continue
+            try:
+                count = int(val_parts[0])
+                collected = list(val_parts[1:])
+                # read continuation lines until we have 'count' values
+                while len(collected) < count and i < len(lines):
+                    extra = lines[i].strip()
+                    i += 1
+                    collected.extend(extra.split())
+                raw = collected[:count]
+                if basictype == 2:
+                    result[name] = [v.strip('"\'') for v in raw]
+                else:
+                    converted = []
+                    for v in raw:
+                        try:
+                            converted.append(float(v))
+                        except ValueError:
+                            converted.append(v)
+                    result[name] = converted
+            except (ValueError, IndexError):
+                result[name] = []
+            # --- enum count line (always present, usually "0") ---
+            if i < len(lines):
+                enum_line = lines[i].strip().split()
+                if enum_line:
+                    try:
+                        enum_count = int(enum_line[0])
+                        i += 1
+                        # skip enum_count value lines (each on own line, or all on one)
+                        for _ in range(enum_count):
+                            if i < len(lines):
+                                i += 1
+                    except ValueError:
+                        pass  # not an enum line; leave i unchanged
+    except Exception as e:
+        print(f'procpar parse error: {e}')
+    return result
+
+
 def find_bruker_or_varian(base_dir):
     """Find the actual data directory by looking for Bruker or Varian signatures."""
     for root, dirs, files in os.walk(base_dir):
@@ -787,7 +865,112 @@ def process_nmr_data(extract_dir):
             
     elif vendor == 'varian':
         dic, data = ng.varian.read(data_path)
-        # TODO: Varian param extraction if needed
+        procpar = dic.get('procpar', {})
+
+        # Helpers that work for both nmrglue format {'values': [...]} and our manual parser format [...]
+        def get_pp(name, default=None, idx=0, as_str=False):
+            entry = procpar.get(name)
+            if entry is None:
+                return default
+            vals = entry.get('values', []) if isinstance(entry, dict) else entry
+            if not vals or idx >= len(vals):
+                return default
+            try:
+                v = vals[idx]
+                return str(v).strip('"\'') if as_str else float(v)
+            except (ValueError, TypeError):
+                return str(vals[idx]).strip('"\'') if as_str else default
+
+        def get_pp_array(name):
+            entry = procpar.get(name)
+            if entry is None:
+                return []
+            vals = entry.get('values', []) if isinstance(entry, dict) else entry
+            out = []
+            for v in vals:
+                try:
+                    out.append(float(v))
+                except (ValueError, TypeError):
+                    pass
+            return out
+
+        # If nmrglue procpar is empty, fall back to manual parser
+        if not procpar:
+            procpar_path_v = os.path.join(data_path, 'procpar')
+            if os.path.exists(procpar_path_v):
+                procpar = parse_varian_procpar(procpar_path_v)
+                print(f"Varian: manual procpar parser found {len(procpar)} params")
+
+        # --- Big delta (diffusion delay) ---
+        # Varian standard DOSY sequences use 'del'; note 'del' is a Python keyword
+        # so we access it as a string key.
+        big_delta_v = get_pp('del', default=None)
+        if big_delta_v is None:
+            big_delta_v = get_pp('Ddelta', default=0.05)
+        params['big_delta'] = big_delta_v
+
+        # --- Little delta (gradient pulse duration) ---
+        # Dbppste/Dbppste_cc uses 'gt1'; some sequences use 'dro' or 'delta'
+        delta_v = get_pp('gt1', default=None)
+        if delta_v is None:
+            delta_v = get_pp('dro', default=None)
+        if delta_v is None:
+            delta_v = get_pp('delta', default=0.002)
+        params['delta'] = delta_v
+
+        # --- Gradient levels array ---
+        gzlvl1 = get_pp_array('gzlvl1')
+        if not gzlvl1:
+            gzlvl1 = get_pp_array('gzlvlw')   # some sequences use gzlvlw
+
+        if gzlvl1:
+            abs_gz = [abs(g) for g in gzlvl1]
+            max_gz = max(abs_gz) if abs_gz else 1.0
+            if max_gz > 0:
+                difframp = [g / max_gz for g in abs_gz]
+                difflist = abs_gz
+            else:
+                difframp = list(np.linspace(0.0, 1.0, len(gzlvl1)))
+                difflist = list(gzlvl1)
+
+            # Gradient calibration factor (G/cm per DAC unit) if available
+            gcal = get_pp('gcal_', default=None)
+            if gcal is None:
+                gcal = get_pp('gcal', default=None)
+            if gcal is not None:
+                params['gcal'] = gcal
+                params['gmax_gcm'] = max_gz * gcal
+
+        # --- Pulse sequence name ---
+        seqfil = get_pp('seqfil', default='unknown', as_str=True)
+        params['pulse_program'] = seqfil.lower().strip('"\'')
+
+        # --- Spectrometer frequency, spectral width, and transmitter offset ---
+        sfrq_v = get_pp('sfrq', default=None)   # MHz
+        sw_v   = get_pp('sw',   default=None)   # Hz
+        tof_v  = get_pp('tof',  default=0.0)    # Hz — transmitter offset from carrier
+        if sfrq_v:
+            params['sfrq'] = sfrq_v
+        if sw_v:
+            params['sw'] = sw_v
+        if tof_v:
+            params['tof'] = tof_v
+
+        # Align number of FID slices with gradient array length
+        if gzlvl1 and len(data.shape) == 2 and data.shape[0] != len(gzlvl1):
+            n_match = min(data.shape[0], len(gzlvl1))
+            data = data[:n_match]
+            difframp = difframp[:n_match]
+            difflist = difflist[:n_match]
+
+        # Ensure data is complex — Varian fid interleaves real/imag as 32-bit int pairs
+        if data.dtype.kind in ('i', 'u'):
+            data = data.astype(np.float64)
+        if not np.iscomplexobj(data):
+            if len(data.shape) == 2 and data.shape[1] % 2 == 0:
+                data = data[:, ::2] + 1j * data[:, 1::2]
+            elif len(data.shape) == 1 and len(data) % 2 == 0:
+                data = data[::2] + 1j * data[1::2]
 
     # Convert to complex if still not complex
     if not np.iscomplexobj(data):
@@ -829,6 +1012,16 @@ def process_nmr_data(extract_dir):
             detected_standard = 'Glycerol'
         elif 'squalane' in folder_search or 'squal' in pulse_program:
             detected_standard = 'Squalane'
+    elif vendor == 'varian':
+        folder_parts = os.path.normpath(data_path).split(os.sep)
+        folder_search = ' '.join(folder_parts).lower()
+        pulse_prog_v  = params.get('pulse_program', '')
+        if 'd2o' in folder_search or 'd2o' in pulse_prog_v:
+            detected_standard = 'D2O'
+        elif 'glycerol' in folder_search or 'glyc' in folder_search:
+            detected_standard = 'Glycerol'
+        elif 'squalane' in folder_search or 'squal' in folder_search:
+            detected_standard = 'Squalane'
 
     # Calculate magnitude spectra for all slices
     processed_spectra = []  # magnitude for stacked display
@@ -859,6 +1052,19 @@ def process_nmr_data(extract_dir):
             ppm_base = np.linspace(o1p + sw_ppm / 2, o1p - sw_ppm / 2, n_pts)
         except Exception as ppm_err:
             print(f'PPM axis from acqus failed: {ppm_err}')
+    elif vendor == 'varian':
+        try:
+            sfrq_v = params.get('sfrq')   # MHz
+            sw_v   = params.get('sw')     # Hz
+            tof_v  = params.get('tof', 0.0)   # Hz
+            if sfrq_v and sw_v:
+                sw_ppm_v  = sw_v  / sfrq_v   # Hz / MHz = ppm
+                ctr_ppm_v = tof_v / sfrq_v   # Hz / MHz = ppm
+                n_pts_v   = len(complex_spectra[0])
+                ppm_base  = np.linspace(ctr_ppm_v + sw_ppm_v / 2,
+                                        ctr_ppm_v - sw_ppm_v / 2, n_pts_v)
+        except Exception as ppm_err_v:
+            print(f'Varian PPM axis failed: {ppm_err_v}')
     if ppm_base is None:
         ppm_base = np.linspace(15, -5, len(complex_spectra[0]))
 
