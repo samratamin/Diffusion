@@ -85,7 +85,7 @@
                                 <input type="file" id="file-standard" class="hidden" accept=".zip">
                             </div>
                             <p class="mt-2 text-[10px] text-gray-500 leading-tight">
-                                Upload a <span class="font-bold">zipped Bruker directory</span> (containing acqus, ser, etc.) for a calibration standard such as D2O, Glycerol, or Squalane.
+                                Upload a <span class="font-bold">zipped Bruker or Varian directory</span> (for example containing Bruker acqus/ser or Varian procpar/fid) for a calibration standard such as D2O, Glycerol, or Squalane.
                             </p>
                         </div>
 
@@ -149,7 +149,7 @@
                                         <thead class="bg-white font-bold text-gray-700 sticky top-0 border-b">
                                             <tr>
                                                 <th class="px-3 py-2">Step</th>
-                                                <th class="px-3 py-2">%</th>
+                                                <th class="px-3 py-2" id="gradient-table-step-header">%</th>
                                                 <th class="px-2 py-2">DiffList</th>
                                                 <th class="px-3 py-2">Strength</th>
                                             </tr>
@@ -1191,20 +1191,37 @@
             // Markers for selected peaks (now also normalized)
             selectedPeaks.forEach((p, peakIdx) => {
                 const targetPpm = parseFloat(p);
-                // Simple index lookup
-                let bestIdx = 0;
-                let minDiff = 999;
-                for(let i=0; i<ppm.length; i++){
-                    let diff = Math.abs(ppm[i] - targetPpm);
-                    if(diff < minDiff){
-                        minDiff = diff;
-                        bestIdx = i;
+                // Prefer exact marker coordinates returned by backend so red dots
+                // reflect the exact point used in intensity extraction.
+                let markerX = null;
+                let markerY = null;
+
+                const markerData = (lastAnalysisResult && lastAnalysisResult.results && lastAnalysisResult.results[peakIdx]
+                    && lastAnalysisResult.results[peakIdx].peak_markers)
+                    ? lastAnalysisResult.results[peakIdx].peak_markers[currentSliceIndex]
+                    : null;
+
+                if (markerData && Number.isFinite(markerData.ppm) && Number.isFinite(markerData.intensity)) {
+                    markerX = markerData.ppm;
+                    markerY = markerData.intensity / maxVal;
+                } else {
+                    // Fallback: nearest ppm index lookup
+                    let bestIdx = 0;
+                    let minDiff = 999;
+                    for(let i=0; i<ppm.length; i++){
+                        let diff = Math.abs(ppm[i] - targetPpm);
+                        if(diff < minDiff){
+                            minDiff = diff;
+                            bestIdx = i;
+                        }
                     }
+                    markerX = ppm[bestIdx];
+                    markerY = spec[bestIdx];
                 }
                 
                 traces.push({
-                    x: [ppm[bestIdx]],
-                    y: [spec[bestIdx]],
+                    x: [markerX],
+                    y: [markerY],
                     mode: 'markers',
                     marker: { size: 10, color: 'red', symbol: 'circle' },
                     name: `${p} ppm`
@@ -1338,48 +1355,72 @@
 
         function displayCalibrationResults(data) {
             lastAnalysisResult = data;
+            const isVarian = (data.vendor === 'varian');
+            const xSymbol = isVarian ? 'DAC' : 's';
+
+            function formatCoeff(v, preferScientific = false) {
+                const av = Math.abs(v);
+                if (preferScientific || (av > 0 && av < 1e-3) || av >= 1e4) {
+                    return v.toExponential(3);
+                }
+                if (av < 0.01) return v.toFixed(6);
+                if (av < 1) return v.toFixed(4);
+                return v.toFixed(2);
+            }
+
+            const slopeStr = formatCoeff(data.fit_slope, isVarian);
+            const interceptAbsStr = formatCoeff(Math.abs(data.fit_intercept), isVarian);
+
             document.getElementById('calib-results').classList.remove('hidden');
             document.getElementById('params-info').innerHTML = `
                 <div class="flex justify-between"><span>Δ Diffusion Time:</span> <span class="font-bold">${(data.big_delta * 1000).toFixed(1)} ms</span></div>
                 <div class="flex justify-between"><span>δ Pulse Width:</span> <span class="font-bold">${(data.delta * 1000).toFixed(1)} ms</span></div>
                 <div class="flex justify-between border-t pt-2 text-blue-800"><span>Calibrated Max G:</span> <span class="font-bold">${data.calibrated_max_g.toFixed(2)} G/cm</span></div>
                 <div class="text-[10px] font-mono mt-2 text-center bg-white p-1 rounded border border-blue-100">
-                    G(s) = ${data.fit_slope.toFixed(2)}·s ${data.fit_intercept >= 0 ? '+ ' + data.fit_intercept.toFixed(2) : '- ' + Math.abs(data.fit_intercept).toFixed(2)}
+                    G(${xSymbol}) = ${slopeStr}·${xSymbol} ${data.fit_intercept >= 0 ? '+ ' + interceptAbsStr : '- ' + interceptAbsStr}
                 </div>
             `;
             Plotly.newPlot('decay-plot', [
                 { x: data.gradients, y: data.intensities, mode: 'markers', name: 'Measured' },
-                { x: data.gradients, y: data.fit_intensities, mode: 'lines', name: 'Fit', line: { color: 'red' } }
+                { x: data.fit_line ? data.fit_line.x : data.gradients, y: data.fit_line ? data.fit_line.y : data.fit_intensities, mode: 'lines', name: 'Fit', line: { color: 'red' } }
             ], { title: 'Decay Fit', margin: {t:40} });
-            Plotly.newPlot('linearity-plot', [
-                { 
-                    x: data.gradient_steps.map(s => s*100), 
-                    y: data.gradients, 
-                    mode: 'markers', 
-                    name: 'Data',
-                    marker: {color:'green', size: 8} 
-                },
-                {
-                    x: [0, 100],
-                    y: [data.fit_intercept, data.fit_slope * 1.0 + data.fit_intercept],
-                    mode: 'lines',
-                    name: 'Linear Fit',
-                    line: {color: 'rgba(0,128,0,0.5)', dash: 'dot', width: 2}
-                }
-            ], { 
-                title: 'Gradient Linearity', 
-                xaxis: {title:'Setting (%)', range: [0, 105], zeroline: false}, 
-                yaxis: {title:'Strength (G/cm)', zeroline: false}, 
-                margin: {t:40},
-                showlegend: true,
-                legend: {x: 0, y: 1}
-            }, { responsive: true, displayModeBar: false });
+            if (isVarian) {
+                // Varian: x-axis is raw DAC units
+                const xMax = Math.max(...data.gradient_steps);
+                Plotly.newPlot('linearity-plot', [
+                    { x: data.gradient_steps, y: data.gradients, mode: 'markers', name: 'Data', marker: {color:'green', size: 8} },
+                    { x: [0, xMax], y: [data.fit_intercept, data.fit_slope * xMax + data.fit_intercept],
+                      mode: 'lines', name: 'Linear Fit', line: {color: 'rgba(0,128,0,0.5)', dash: 'dot', width: 2} }
+                ], {
+                    title: 'Gradient Linearity',
+                    xaxis: {title: 'Gradient Level (DAC units)', range: [0, xMax * 1.05], zeroline: false},
+                    yaxis: {title: 'Strength (G/cm)', zeroline: false},
+                    margin: {t:40}, showlegend: true, legend: {x:0, y:1}
+                }, { responsive: true, displayModeBar: false });
+            } else {
+                // Bruker: x-axis is setting % (gradient_steps are 0-1 fractions, displayed as %)
+                Plotly.newPlot('linearity-plot', [
+                    { x: data.gradient_steps.map(s => s * 100), y: data.gradients, mode: 'markers', name: 'Data', marker: {color:'green', size: 8} },
+                    { x: [0, 100], y: [data.fit_intercept, data.fit_slope * 1.0 + data.fit_intercept],
+                      mode: 'lines', name: 'Linear Fit', line: {color: 'rgba(0,128,0,0.5)', dash: 'dot', width: 2} }
+                ], {
+                    title: 'Gradient Linearity',
+                    xaxis: {title: 'Setting (%)', range: [0, 105], zeroline: false},
+                    yaxis: {title: 'Strength (G/cm)', zeroline: false},
+                    margin: {t:40}, showlegend: true, legend: {x:0, y:1}
+                }, { responsive: true, displayModeBar: false });
+            }
             const tbody = document.getElementById('gradient-table-body');
             tbody.innerHTML = '';
+            const isVarianTbl = (data.vendor === 'varian');
+            document.getElementById('gradient-table-step-header').textContent = isVarianTbl ? 'DAC' : '%';
             data.gradients.forEach((g, i) => {
+                const stepLabel = isVarianTbl
+                    ? `${Math.round(data.gradient_steps[i])}`
+                    : `${(data.gradient_steps[i]*100).toFixed(1)}%`;
                 const row = `<tr>
                     <td class="px-3 py-1.5 font-mono text-gray-500">${i+1}</td>
-                    <td class="px-3 py-1.5 font-mono">${(data.gradient_steps[i]*100).toFixed(1)}%</td>
+                    <td class="px-3 py-1.5 font-mono">${stepLabel}</td>
                     <td class="px-2 py-1.5 font-mono text-gray-400">${(data.difflist[i] ? data.difflist[i].toFixed(2) : "-")}</td>
                     <td class="px-3 py-1.5 font-mono font-bold text-blue-600">${g.toFixed(2)}</td>
                 </tr>`;

@@ -201,22 +201,41 @@ def analyze_diffusion():
             
             intensities = []
             peak_fit_models = [] # To store fit data for UI deconvolution visualization
+            peak_markers = []    # Exact points used for UI marker overlay (x/y on spectrum)
 
             for slice_idx in range(len(raw_spectra)):
                 slice_y = np.array(raw_spectra[slice_idx])
+                marker_idx = idx
 
                 if method in ('intensity', 'intensity_max'):
-                    # Max intensity within ±15 points of the target PPM
-                    window = 15
+                    # Peak max near target: find local maxima and choose the one
+                    # closest to selected ppm (prevents jumping to neighboring peaks).
+                    window = 20
                     start = max(0, idx - window)
-                    end = min(len(slice_y), idx + window)
+                    end = min(len(slice_y), idx + window + 1)
                     segment = slice_y[start:end]
-                    val = float(np.max(segment)) if len(segment) > 0 else 0.0
+                    x_seg = full_ppm[start:end]
+
+                    if len(segment) > 0:
+                        # Try local maxima first to keep the picked point tied to target_ppm.
+                        peaks, _ = find_peaks(segment)
+                        if len(peaks) > 0:
+                            nearest_peak_idx = peaks[np.argmin(np.abs(x_seg[peaks] - target_ppm))]
+                            marker_idx = start + int(nearest_peak_idx)
+                            val = float(slice_y[marker_idx])
+                        else:
+                            # Fallback for flat/broad peaks where no discrete local max is found.
+                            marker_idx = start + int(np.argmax(segment))
+                            val = float(slice_y[marker_idx])
+                    else:
+                        val = 0.0
+                        marker_idx = idx
                     peak_fit_models.append(None)
 
                 elif method == 'intensity_exact':
                     # Intensity at the exact PPM index (no window search)
                     val = float(slice_y[idx]) if idx < len(slice_y) else 0.0
+                    marker_idx = idx
                     peak_fit_models.append(None)
 
                 else:  # method in ('area', 'intensity_fit')
@@ -338,6 +357,9 @@ def analyze_diffusion():
                                 'amplitude': round(float(best_popt[0]), 4),
                                 'all_r2': all_r2
                             })
+
+                            # For fit/area methods, draw the marker at fitted center.
+                            marker_idx = int(np.argmin(np.abs(full_ppm - float(best_popt[1]))))
                         else:
                             # All models failed — fallback
                             trap_val = float(np.trapz(y_sub, x_seg))
@@ -351,8 +373,14 @@ def analyze_diffusion():
                                 'amplitude': round(amp_g, 4),
                                 'all_r2': {}
                             })
+                            marker_idx = idx
                 
                 intensities.append(val)
+                marker_idx = max(0, min(marker_idx, len(slice_y) - 1))
+                peak_markers.append({
+                    'ppm': safe_float(full_ppm[marker_idx]),
+                    'intensity': safe_float(slice_y[marker_idx])
+                })
             
             intensities = np.array(intensities)
             
@@ -449,7 +477,8 @@ def analyze_diffusion():
                 'd_value': safe_float(d_value),
                 'r_squared': safe_float(r2),
                 'error_pct': safe_float(error_pct),
-                'peak_fits': peak_fit_models
+                'peak_fits': peak_fit_models,
+                'peak_markers': peak_markers
             })
 
         return jsonify({
@@ -782,7 +811,7 @@ def process_nmr_data(extract_dir):
     if not vendor:
         raise ValueError("Could not detect Bruker or Varian data structure in the uploaded zip.")
 
-    params = {'delta': 0.002, 'big_delta': 0.050, 'gamma': 2.67522e8} # Defaults
+    params = {'gamma': 2.67522e8, 'vendor': vendor}
     difflist = None
     difframp = None
 
@@ -865,6 +894,15 @@ def process_nmr_data(extract_dir):
             
     elif vendor == 'varian':
         dic, data = ng.varian.read(data_path)
+
+        # nmrglue may return (1, n_gradients, n_pts) or higher-dimensional arrays
+        # for arrayed Varian experiments. Squeeze singleton dims then ensure 2D.
+        data = np.squeeze(data)
+        if data.ndim == 1:
+            data = data[np.newaxis, :]
+        elif data.ndim > 2:
+            data = data.reshape(-1, data.shape[-1])
+
         procpar = dic.get('procpar', {})
 
         # Helpers that work for both nmrglue format {'values': [...]} and our manual parser format [...]
@@ -901,22 +939,24 @@ def process_nmr_data(extract_dir):
                 procpar = parse_varian_procpar(procpar_path_v)
                 print(f"Varian: manual procpar parser found {len(procpar)} params")
 
+        def first_pp_value(names, as_str=False):
+            for name in names:
+                value = get_pp(name, default=None, as_str=as_str)
+                if value is not None:
+                    return value
+            return None
+
         # --- Big delta (diffusion delay) ---
-        # Varian standard DOSY sequences use 'del'; note 'del' is a Python keyword
-        # so we access it as a string key.
-        big_delta_v = get_pp('del', default=None)
-        if big_delta_v is None:
-            big_delta_v = get_pp('Ddelta', default=0.05)
-        params['big_delta'] = big_delta_v
+        # Varian DOSY sequences commonly use procpar names such as del/Ddelta/del2.
+        big_delta_v = first_pp_value(['del', 'Ddelta', 'del2'])
+        if big_delta_v is not None:
+            params['big_delta'] = big_delta_v
 
         # --- Little delta (gradient pulse duration) ---
-        # Dbppste/Dbppste_cc uses 'gt1'; some sequences use 'dro' or 'delta'
-        delta_v = get_pp('gt1', default=None)
-        if delta_v is None:
-            delta_v = get_pp('dro', default=None)
-        if delta_v is None:
-            delta_v = get_pp('delta', default=0.002)
-        params['delta'] = delta_v
+        # Dbppste/Dbppste_cc commonly uses gt1; other variants may store dro/delta/del1.
+        delta_v = first_pp_value(['gt1', 'dro', 'delta', 'del1'])
+        if delta_v is not None:
+            params['delta'] = delta_v
 
         # --- Gradient levels array ---
         gzlvl1 = get_pp_array('gzlvl1')
@@ -926,12 +966,11 @@ def process_nmr_data(extract_dir):
         if gzlvl1:
             abs_gz = [abs(g) for g in gzlvl1]
             max_gz = max(abs_gz) if abs_gz else 1.0
-            if max_gz > 0:
-                difframp = [g / max_gz for g in abs_gz]
-                difflist = abs_gz
-            else:
-                difframp = list(np.linspace(0.0, 1.0, len(gzlvl1)))
-                difflist = list(gzlvl1)
+            # Keep raw DAC units — do NOT normalize to 0-1 fractions.
+            # The calibration step fits G/cm per DAC unit (gcal) directly.
+            difframp = abs_gz
+            difflist = abs_gz
+            params['dac_max'] = max_gz  # highest DAC value used
 
             # Gradient calibration factor (G/cm per DAC unit) if available
             gcal = get_pp('gcal_', default=None)
@@ -1079,8 +1118,14 @@ def process_nmr_data(extract_dir):
         x_shift = i * 0.1
         x_ppm_staggered = (ppm_base - x_shift)
 
-        # Labels for the plot: Use difframp (%) if available, else indices
-        label_val = (difframp[i] * 100) if difframp is not None else difflist[i]
+        # Labels for the plot
+        if params.get('vendor') == 'varian':
+            # Varian: show raw DAC units, not percentages
+            label_str = f'DAC: {int(difframp[i])}' if difframp is not None else f'{i+1}'
+        else:
+            # Bruker: difframp is 0-1 fraction → show as %
+            label_val = (difframp[i] * 100) if difframp is not None else difflist[i]
+            label_str = f'{label_val:.2f}%'
 
         traces.append({
             'x': x_ppm_staggered.tolist(),
@@ -1088,7 +1133,7 @@ def process_nmr_data(extract_dir):
             'customdata': ppm_base.tolist(), # Store original ppm here
             'type': 'scatter',
             'mode': 'lines',
-            'name': f'Step {i+1} ({label_val:.2f}%)',
+            'name': f'Step {i+1} ({label_str})',
             'hovertemplate': 'PPM: %{customdata:.3f}<br>Intensity: %{y:.3f}<extra></extra>'
         })
 
@@ -1178,42 +1223,74 @@ def analyze_peak():
 
     # 4. Perform fitting using Stejskal-Tanner
     GAMMA = exp_params.get('gamma', 2.67522e8)
-    DELTA = exp_params.get('delta', 0.002)
-    BIG_DELTA = exp_params.get('big_delta', 0.050)
+    DELTA = exp_params.get('delta')
+    BIG_DELTA = exp_params.get('big_delta')
+
+    missing_params = []
+    if DELTA is None:
+        missing_params.append('delta')
+    if BIG_DELTA is None:
+        missing_params.append('big_delta')
+    if missing_params:
+        return jsonify({
+            'error': 'Dataset is missing required diffusion timing parameter(s): ' + ', '.join(missing_params)
+        }), 400
     
     # If no diff_ramp provided, default to linear 0.02 to 0.95
     if len(diff_ramp) == 0:
         diff_ramp = np.linspace(0.02, 0.95, len(intensities))
     
-    def stejskal_tanner(ramp_val, I0, g_scale):
-        # I = I0 * exp(-D_known * (gamma * g * delta)^2 * (Delta - delta/3.0))
-        # Note: In stebpgp1s, p30 is little delta * 0.5. 
-        # So we use 2 * p30 (which is params['delta'] here) as the total gradient duration.
-        g = ramp_val * g_scale
-        b_value = (GAMMA * g * DELTA)**2 * (BIG_DELTA - DELTA/3.0)
-        return I0 * np.exp(-D_known * b_value)
+    vendor = exp_params.get('vendor', 'bruker')
+
+    if vendor == 'varian':
+        # Varian: diff_ramp contains raw DAC units (e.g. 100 … 32000).
+        # Fit gcal = G/cm per DAC unit.  g(T/m) = dac * gcal * 0.01
+        def stejskal_tanner(dac_val, I0, gcal_gcm_per_dac):
+            g_tm = dac_val * gcal_gcm_per_dac * 0.01   # G/cm/DAC * 0.01 T/m/(G/cm)
+            b_value = (GAMMA * g_tm * DELTA)**2 * (BIG_DELTA - DELTA / 3.0)
+            return I0 * np.exp(-D_known * b_value)
+
+        # Initial guess: assume ~40 G/cm max at the highest DAC value
+        dac_max_guess = float(np.max(diff_ramp)) if len(diff_ramp) > 0 else 32767.0
+        gcal_guess = 40.0 / dac_max_guess  # G/cm per DAC unit
+        p0_cal = [intensities[0], gcal_guess]
+        bounds_cal = ([0, 0], [np.inf, 10.0])
+    else:
+        # Bruker: diff_ramp is 0-1 fraction; fit g_scale = max gradient in T/m
+        def stejskal_tanner(ramp_val, I0, g_scale):
+            g = ramp_val * g_scale
+            b_value = (GAMMA * g * DELTA)**2 * (BIG_DELTA - DELTA / 3.0)
+            return I0 * np.exp(-D_known * b_value)
+
+        p0_cal = [intensities[0], 0.5]
+        bounds_cal = ([0, 0], [np.inf, np.inf])
 
     try:
-        # P0: I0 = max intensity, g_scale = 50 T/m (500 G/cm approx) 
-        # Note: popping 0.5 T/m (50 G/cm) is more standard for small bore
-        popt, _ = curve_fit(stejskal_tanner, diff_ramp, intensities, p0=[intensities[0], 0.5])
-        
-        I0_fit = popt[0]
-        G_max_fit = popt[1] # Calibrated max gradient in T/m
-        
-        fit_intensities = stejskal_tanner(diff_ramp, *popt)
-        
-        # Convert T/m to Gauss/cm: 1 T/m = 100 Gauss/cm
-        calculated_max_g_gauss = G_max_fit * 100.0
-        
-        # Resultant gradient strengths in Gauss/cm
-        gradients_gauss = diff_ramp * calculated_max_g_gauss
+        popt, _ = curve_fit(stejskal_tanner, diff_ramp, intensities,
+                            p0=p0_cal, bounds=bounds_cal, maxfev=10000)
 
-        # Perform a linear fit on: actual_gradients = slope * setting_percentage + intercept
-        # diff_ramp is 0..1 (fraction), gradients_gauss is G/cm
-        # We fit: y = m*x + c where x is the fraction
+        I0_fit = popt[0]
+        fit_intensities = stejskal_tanner(diff_ramp, *popt)
+
+        # Dense smooth fit line (500 points across the DAC / ramp range)
+        ramp_smooth = np.linspace(0.0, float(np.max(diff_ramp)), 500)
+        fit_line_y  = stejskal_tanner(ramp_smooth, *popt)
+
+        if vendor == 'varian':
+            gcal_fit       = popt[1]              # G/cm per DAC unit
+            gradients_gauss = np.array(diff_ramp) * gcal_fit   # G/cm
+            calculated_max_g_gauss = float(np.max(diff_ramp)) * gcal_fit
+            fit_line_x = (ramp_smooth * gcal_fit).tolist()    # G/cm axis
+        else:
+            G_max_fit = popt[1]                   # T/m
+            calculated_max_g_gauss = G_max_fit * 100.0        # G/cm
+            gradients_gauss = diff_ramp * calculated_max_g_gauss
+            fit_line_x = (ramp_smooth * calculated_max_g_gauss).tolist()
+
+        # Linear calibration: G/cm = slope * x + intercept
+        # x = DAC units (Varian) or 0-1 fraction (Bruker)
         slope, intercept = np.polyfit(diff_ramp, gradients_gauss, 1)
-        
+
     except Exception as e:
         return jsonify({'error': f'Fitting failed: {str(e)}'}), 500
 
@@ -1221,6 +1298,10 @@ def analyze_peak():
         'ppm': ppm_clicked,
         'intensities': intensities.tolist(),
         'fit_intensities': fit_intensities.tolist(),
+        'fit_line': {
+            'x': fit_line_x,
+            'y': fit_line_y.tolist()
+        },
         'gradient_steps': diff_ramp.tolist(),
         'gradients': gradients_gauss.tolist(),
         'calibrated_max_g': calculated_max_g_gauss,
@@ -1228,7 +1309,8 @@ def analyze_peak():
         'fit_intercept': float(intercept),
         'delta': DELTA,
         'big_delta': BIG_DELTA,
-        'difflist': data.get('difflist', [])
+        'difflist': data.get('difflist', []),
+        'vendor': vendor
     })
 
 @app.route('/save_calibration', methods=['POST'])
