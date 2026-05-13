@@ -537,6 +537,7 @@
         let calibrations = [];
         let selectedCalibration = null;
         let selectedPeaks = []; // Unified selection location
+        let selectedCalibrationPeak = null; // Track clicked peak in calibration workflow
         let currentSliceIndex = 0;
         let omittedSlices = [];
 
@@ -562,8 +563,11 @@
         // Processing Wizard
         // ============================================================
         let currentWizardStep = 1;
+        let currentWorkflow = 'analysis';
 
-        function showProcessingWizard() {
+        function showProcessingWizard(workflow = 'analysis') {
+            currentWorkflow = workflow;
+
             // Reset controls
             document.getElementById('ph0-slider').value = 0;
             document.getElementById('ph1-slider').value = 0;
@@ -579,6 +583,7 @@
             document.getElementById('proc-step-2').classList.add('hidden');
             document.getElementById('processing-wizard').classList.remove('hidden');
             document.getElementById('analysis-workspace').classList.add('hidden');
+            document.getElementById('calib-workspace').classList.add('hidden');
 
             // Initial preview (magnitude-equivalent at ph0=0)
             updatePhasePreview();
@@ -835,7 +840,7 @@
                     type: 'scatter', mode: 'lines', name: 'Slice 1 (Processed)',
                     line: { color: '#2563eb', width: 1.5 }
                 }];
-                _proceedToAnalysis();
+                proceedAfterProcessing();
             } catch (e) {
                 console.error('Apply processing error:', e);
                 alert('Processing failed. Check browser console.');
@@ -844,11 +849,17 @@
 
         function skipProcessing() {
             // Use magnitude spectra as-is (legacy behaviour)
-            _proceedToAnalysis();
+            proceedAfterProcessing();
         }
 
-        function _proceedToAnalysis() {
+        function proceedAfterProcessing() {
             document.getElementById('processing-wizard').classList.add('hidden');
+            if (currentWorkflow === 'calibration') {
+                document.getElementById('calib-workspace').classList.remove('hidden');
+                renderSelectionPlot('plot-selection', currentNmrData, handleCalibrationPeakClick);
+                return;
+            }
+
             document.getElementById('analysis-workspace').classList.remove('hidden');
             renderSelectionPlot('plot-selection-analysis-top', currentNmrData, handleAnalysisPeakClick);
         }
@@ -867,6 +878,7 @@
             document.getElementById('calib-choice').classList.remove('hidden');
             document.getElementById('calib-new-panel').classList.add('hidden');
             document.getElementById('calib-workspace').classList.add('hidden');
+            document.getElementById('processing-wizard').classList.add('hidden');
         }
 
         function switchTab(tab) {
@@ -925,14 +937,27 @@
             selectedCalibration = calibrations.find(c => c.id == id);
             const summary = document.getElementById('selected-calib-summary');
             if (selectedCalibration) {
-                const slope = selectedCalibration.slope || 0;
-                const intercept = selectedCalibration.intercept || 0;
+                const slope = parseFloat(selectedCalibration.slope) || 0;
+                const intercept = parseFloat(selectedCalibration.intercept) || 0;
+                
+                // Format coefficients like in displayCalibrationResults
+                function formatCoeff(v, preferScientific = false) {
+                    const av = Math.abs(v);
+                    if (preferScientific || (av > 0 && av < 1e-3) || av >= 1e4) {
+                        return v.toExponential(3);
+                    }
+                    if (av < 0.01) return v.toFixed(6);
+                    if (av < 1) return v.toFixed(4);
+                    return v.toFixed(2);
+                }
+                
+                const slopeStr = formatCoeff(slope);
+                const interceptAbsStr = formatCoeff(Math.abs(intercept));
                 const sign = intercept >= 0 ? '+' : '-';
-                const absIntercept = Math.abs(intercept).toFixed(2);
                 summary.innerHTML = `
                     <div class='space-y-1'>
                         <div class='font-bold text-green-800 underline decoration-green-300'>Active Profile: ${selectedCalibration.name}</div>
-                        <div class='font-mono text-[11px]'>Equation: G(s) = ${slope.toFixed(2)}·s ${sign} ${absIntercept}</div>
+                        <div class='font-mono text-[11px]'>Equation: G(s) = ${slopeStr}·s ${sign} ${interceptAbsStr}</div>
                         <div>Max Strength: <span class='font-bold'>${selectedCalibration.max_g.toFixed(2)} G/cm</span></div>
                     </div>
                 `;
@@ -1007,14 +1032,13 @@
                         // 2. Render Stacked Plot for verification
                         renderStackedPlot('plot-stacked-calib', data.plot_data.stacked_data);
 
-                        document.getElementById('calib-workspace').classList.remove('hidden');
-                        renderSelectionPlot('plot-selection', data.plot_data, handleCalibrationPeakClick);
+                        showProcessingWizard('calibration');
                     } else {
                         // Swap: Hide upload box, show stacked plot + processing wizard
                         document.getElementById('analysis-upload-area').classList.add('hidden');
                         document.getElementById('analysis-verification-area').classList.remove('hidden');
                         renderStackedPlot('plot-stacked-sample', data.plot_data.stacked_data);
-                        showProcessingWizard();
+                        showProcessingWizard('analysis');
                     }
                 }
             });
@@ -1332,6 +1356,7 @@
 
         function handleCalibrationPeakClick(clickData) {
             const ppm = clickData.points[0].x;
+            selectedCalibrationPeak = ppm;  // Store the clicked peak
             const standardType = document.getElementById('standard-select').value;
             fetch('/analyze_peak', {
                 method: 'POST',
@@ -1410,6 +1435,43 @@
                     margin: {t:40}, showlegend: true, legend: {x:0, y:1}
                 }, { responsive: true, displayModeBar: false });
             }
+            // Re-render the calibration plot with the selected peak marker
+            if (currentNmrData && selectedCalibrationPeak !== null) {
+                const plotData = currentNmrData.selection_data || [{x: currentNmrData.raw_ppm, y: currentNmrData.raw_spectra[0]}];
+                const layout = {
+                    title: 'Chemical Shift Spectrum (Slice 1)',
+                    xaxis: { title: 'Chemical Shift (ppm)', autorange: 'reversed', zeroline: false },
+                    yaxis: { title: 'Intensity', showticklabels: true, exponentformat: 'e', showexponent: 'all', zeroline: false },
+                    margin: { l: 60, r: 40, t: 40, b:40 }
+                };
+                const specData = plotData[0];
+                if (specData && specData.x && specData.y) {
+                    // Find closest index to selected peak
+                    let idx = 0;
+                    let minDiff = 999;
+                    for(let i=0; i<specData.x.length; i++){
+                        let diff = Math.abs(specData.x[i] - selectedCalibrationPeak);
+                        if(diff < minDiff){
+                            minDiff = diff;
+                            idx = i;
+                        }
+                    }
+                    const yVal = specData.y[idx];
+                    layout.shapes = [
+                        {
+                            type: 'circle',
+                            xref: 'x', yref: 'y',
+                            x0: selectedCalibrationPeak - 0.05, x1: selectedCalibrationPeak + 0.05,
+                            y0: yVal - 0.01, y1: yVal + 0.01,
+                            line: { color: 'red', width: 2 },
+                            fillcolor: 'red'
+                        }
+                    ];
+                }
+                Plotly.react('plot-selection', plotData, layout, { responsive: true, displayModeBar: false });
+                document.getElementById('plot-selection').on('plotly_click', handleCalibrationPeakClick);
+            }
+
             const tbody = document.getElementById('gradient-table-body');
             tbody.innerHTML = '';
             const isVarianTbl = (data.vendor === 'varian');
