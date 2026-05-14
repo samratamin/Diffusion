@@ -404,7 +404,13 @@
                     <!-- Analysis Results / Plots - NOW FULL WIDTH BELOW -->
                     <div class="w-full space-y-6">
                         <div class="p-6 bg-white border border-gray-200 rounded-xl shadow-sm min-h-[300px]">
-                            <h3 class="text-lg font-bold text-gray-800 mb-4">Diffusion Results</h3>
+                            <div class="flex items-center justify-between mb-4">
+                                <h3 class="text-lg font-bold text-gray-800">Diffusion Results</h3>
+                                <button id="btn-download-analysis" onclick="downloadAnalysisData()" class="hidden px-5 py-2.5 bg-green-600 text-white text-[10px] font-black uppercase tracking-widest rounded-xl hover:bg-green-700 shadow-md transition-all active:scale-95 flex items-center gap-2">
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                                    Download All Data
+                                </button>
+                            </div>
                             <div id="analysis-results-placeholder" class="flex flex-col items-center justify-center h-[200px] text-gray-400">
                                 <i class="fas fa-chart-line text-3xl mb-2"></i>
                                 <p class="text-xs font-medium">Select peaks and click "Run Analysis" to calculate D</p>
@@ -916,7 +922,7 @@
             .then(data => {
                 calibrations = data;
                 const picker = document.getElementById('calib-picker');
-                picker.innerHTML = '<option value="">-- Load Saved Calibration --</option>';
+                picker.innerHTML = '<option value="">-- Load Saved Profile --</option>';
                 data.forEach(c => {
                     const opt = document.createElement('option');
                     opt.value = c.id;
@@ -1675,6 +1681,75 @@
                     </td>
                 </tr>
             `).join('');
+
+            // Show download button now that results are available
+            document.getElementById('btn-download-analysis').classList.remove('hidden');
+        }
+
+        function downloadAnalysisData() {
+            if (!lastAnalysisResult || !lastAnalysisResult.results) {
+                alert('No analysis results available to download.');
+                return;
+            }
+
+            const btn = document.getElementById('btn-download-analysis');
+            const originalHTML = btn.innerHTML;
+            btn.disabled = true;
+            btn.innerHTML = `<i class="fas fa-spinner fa-spin mr-2"></i> Preparing Download...`;
+
+            // Gather all data needed for the download
+            const payload = {
+                results: lastAnalysisResult.results,
+                params: lastAnalysisResult.params,
+                calibration: selectedCalibration ? {
+                    name: selectedCalibration.name,
+                    slope: selectedCalibration.slope,
+                    intercept: selectedCalibration.intercept,
+                    max_g: selectedCalibration.max_g,
+                    timestamp: selectedCalibration.timestamp
+                } : null,
+                peaks_ppm: selectedPeaks.map(p => parseFloat(p)),
+                method: getSelectedMethod(),
+                detected_standard: currentNmrData?.detected_standard || null,
+                ph0: parseFloat(document.getElementById('ph0-slider')?.value || 0),
+                ph1: parseFloat(document.getElementById('ph1-slider')?.value || 0),
+                baseline_order: parseInt(document.querySelector('input[name="baseline-method"]:checked')?.value || -1),
+                vendor: currentNmrData?.vendor || 'unknown',
+                pulse_program: lastAnalysisResult.params?.pulse_program || 'unknown',
+                delta: lastAnalysisResult.params?.delta || 0,
+                big_delta: lastAnalysisResult.params?.big_delta || 0,
+                calibration_name: selectedCalibration?.name || 'N/A',
+                raw_ppm: currentNmrData?.raw_ppm || [],
+                raw_spectra: currentNmrData?.raw_spectra || []
+            };
+
+            fetch('/download_analysis', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            })
+            .then(res => {
+                if (!res.ok) return res.json().then(err => { throw new Error(err.error || 'Download failed'); });
+                return res.blob();
+            })
+            .then(blob => {
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = blob.name || 'nmr_diffusion_analysis.zip';
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+                document.body.removeChild(a);
+            })
+            .catch(err => {
+                console.error('Download Error:', err);
+                alert('Download failed: ' + err.message);
+            })
+            .finally(() => {
+                btn.disabled = false;
+                btn.innerHTML = originalHTML;
+            });
         }
 
         document.getElementById('btn-save-calib').addEventListener('click', () => document.getElementById('modal-save').classList.remove('hidden'));
