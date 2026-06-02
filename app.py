@@ -16,8 +16,32 @@ import secrets
 from functools import wraps
 from datetime import datetime
 
-# In-memory store for uploaded NMR datasets, keyed by session UUID
-_nmr_data_store = {}
+# In-memory store for uploaded NMR datasets, keyed by session UUID.
+# Capped at 10 entries (LRU eviction) to prevent OOM on busy servers.
+from collections import OrderedDict
+
+class _LRUStore(OrderedDict):
+    """OrderedDict with a max-size cap; evicts oldest entry when full."""
+    def __init__(self, maxsize=10):
+        super().__init__()
+        self._maxsize = maxsize
+    def __setitem__(self, key, value):
+        if key in self:
+            self.move_to_end(key)
+        super().__setitem__(key, value)
+        if len(self) > self._maxsize:
+            oldest_key, oldest_val = next(iter(self.items()))
+            # Explicitly delete numpy arrays before eviction to free RAM immediately
+            for k in list(oldest_val.keys()):
+                if k.startswith('_'):
+                    del oldest_val[k]
+            self.popitem(last=False)
+    def __getitem__(self, key):
+        val = super().__getitem__(key)
+        self.move_to_end(key)
+        return val
+
+_nmr_data_store = _LRUStore(maxsize=10)
 
 def safe_float(v, fallback=0.0):
     """Return a JSON-safe float, replacing NaN/Inf with fallback."""
