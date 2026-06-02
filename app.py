@@ -1404,6 +1404,9 @@ def phase_spectrum():
             complex_arr = np.array(plot_data['_complex_spectra'])
 
         ppm = np.array(plot_data['raw_ppm'])
+        # When n_fft differs from the stored spectrum length, interpolate ppm to match
+        if complex_arr.shape[1] != len(ppm):
+            ppm = np.linspace(ppm[0], ppm[-1], complex_arr.shape[1])
 
         phased = _apply_phase(complex_arr, ph0, ph1, ppm,
                               float(pivot_ppm) if pivot_ppm is not None else None)
@@ -1528,6 +1531,9 @@ def apply_processing():
 
         complex_arr = np.array(plot_data['_complex_spectra'])
         ppm = np.array(plot_data['raw_ppm'])
+        # When n_fft differs from the stored spectrum length, interpolate ppm to match
+        if complex_arr.shape[1] != len(ppm):
+            ppm = np.linspace(ppm[0], ppm[-1], complex_arr.shape[1])
 
         # For preview, only process slice 0 (much faster)
         if preview:
