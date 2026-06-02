@@ -798,9 +798,12 @@
 
             const baseLb = currentNmrData?.initial_processing_lb ?? currentNmrData?.processing_lb ?? 1.0;
             const baseFft = currentNmrData?.initial_processing_fft_points ?? currentNmrData?.processing_fft_points ?? null;
+            // If backend never stored fft_points (null), default was n_collected*4 — same as dropdown default.
+            const nCollected = currentNmrData?.exp_params?.n_collected || 0;
+            const effectiveBaseFft = baseFft ?? (nCollected ? nCollected * 4 : null);
             const needsServerReprocess = !currentNmrData
                 || baseLb !== lb
-                || (baseFft || null) !== fftPoints;
+                || (effectiveBaseFft || null) !== fftPoints;
 
             // Use fast client-side math only when the preview matches the processed FID state.
             if (!needsServerReprocess && currentNmrData && (currentNmrData.complex_re_0 || currentNmrData.complex_re)) {
@@ -816,7 +819,7 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ data_id: currentDataId, ph0, ph1, pivot_ppm: pivot, lb, fft_points: fftPoints })
             })
-            .then(r => r.json())
+            .then(r => { if (!r.ok) throw new Error(`Server ${r.status}`); return r.json(); })
             .then(d => {
                 if (d.phased_spectra) {
                     renderWizardPlot('plot-phase-preview', [d.phased_spectra[0]], d.ppm);
@@ -872,7 +875,9 @@
                     body: JSON.stringify({ data_id: currentDataId,
                         pivot_ppm: pivotVal ? parseFloat(pivotVal) : null })
                 });
+                if (!r.ok) throw new Error(`Auto-phase server error ${r.status}`);
                 const d = await r.json();
+                if (d.error) throw new Error(d.error);
                 if (d.ph0 !== undefined) {
                     document.getElementById('ph0-slider').value = d.ph0;
                     document.getElementById('ph1-slider').value = d.ph1 || 0;
@@ -884,7 +889,11 @@
                     }
                     updatePhasePreview();  // instant via client-side JS
                 }
-            } catch (e) { console.error('Auto-phase error:', e); }
+            } catch (e) {
+                console.error('Auto-phase error:', e);
+                btn.innerHTML = '<i class="fas fa-exclamation-triangle mr-1"></i> Unavailable';
+                setTimeout(() => { btn.innerHTML = origHtml; }, 3000);
+            }
             finally {
                 btn.innerHTML = origHtml;
                 btn.disabled = false;
@@ -936,9 +945,12 @@
 
             const baseLb = currentNmrData?.initial_processing_lb ?? currentNmrData?.processing_lb ?? 1.0;
             const baseFft = currentNmrData?.initial_processing_fft_points ?? currentNmrData?.processing_fft_points ?? null;
+            // If backend never stored fft_points (null), default was n_collected*4 — same as dropdown default.
+            const nCollected = currentNmrData?.exp_params?.n_collected || 0;
+            const effectiveBaseFft = baseFft ?? (nCollected ? nCollected * 4 : null);
             const needsServerReprocess = !currentNmrData
                 || baseLb !== lb
-                || (baseFft || null) !== fftPoints;
+                || (effectiveBaseFft || null) !== fftPoints;
 
             if (baselineOrder === -1 || !currentDataId) {
                 const instant = applyPhaseJS(ph0, ph1, pivot);
@@ -955,7 +967,7 @@
                     body: JSON.stringify({ data_id: currentDataId, ph0, ph1,
                         pivot_ppm: pivot, baseline_order: baselineOrder, preview: true, lb, fft_points: fftPoints })
                 })
-                .then(r => r.json())
+                .then(r => { if (!r.ok) throw new Error(`Server ${r.status}`); return r.json(); })
                 .then(d => {
                     if (d.raw_spectra && d.raw_spectra.length > 0) {
                         renderBaselinePlot('plot-baseline-preview', d.raw_spectra[0], null, d.ppm);
