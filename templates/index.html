@@ -1116,13 +1116,17 @@
                 note.classList.add('hidden');
             }
 
-            // Auto-select first match if available
-            if (filtered.length > 0) {
-                picker.value = filtered[0].id;
-                picker.dispatchEvent(new Event('change'));
-            } else {
-                selectedCalibration = null;
-                document.getElementById('selected-calib-summary').classList.add('hidden');
+            // Always clear selection — force user to choose explicitly
+            picker.value = '';
+            selectedCalibration = null;
+            document.getElementById('selected-calib-summary').classList.add('hidden');
+            if (vendor && filtered.length === 0) {
+                const note = document.getElementById('calib-vendor-filter-note');
+                document.getElementById('calib-vendor-filter-text').textContent =
+                    `No ${vendor.charAt(0).toUpperCase()+vendor.slice(1)} calibrations found — showing all`;
+                note.classList.remove('hidden');
+                // Show all as fallback so picker is not empty
+                _populateCalibPicker(data, null);
             }
         }
 

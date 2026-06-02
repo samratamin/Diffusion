@@ -232,7 +232,13 @@
                     {% for cal in calibrations %}
                     <tr>
                         <td><span class="cal-name">{{ cal['name'] }}</span></td>
-                        <td><span class="mono" style="font-size:0.78rem;text-transform:capitalize">{{ cal['vendor'] or 'bruker' }}</span></td>
+                        <td>
+                            <select class="vendor-select" data-cal-id="{{ cal['id'] }}"
+                                style="font-size:0.78rem;border:1px solid #d1d5db;border-radius:6px;padding:2px 6px;background:#fff;cursor:pointer;">
+                                <option value="bruker" {% if (cal['vendor'] or 'bruker') == 'bruker' %}selected{% endif %}>Bruker</option>
+                                <option value="varian" {% if cal['vendor'] == 'varian' %}selected{% endif %}>Varian</option>
+                            </select>
+                        </td>
                         <td><span class="cal-date">{{ cal['timestamp'] }}</span></td>
                         <td class="mono">{{ "%.3f" | format(cal['max_g_gauss']) }}</td>
                         <td class="mono">{{ "%.3f" | format(cal['delta'] * 1000) if cal['delta'] else "—" }}</td>
@@ -256,5 +262,26 @@
             {% endif %}
         </div>
     </div>
+<script>
+document.querySelectorAll('.vendor-select').forEach(sel => {
+    sel.addEventListener('change', function() {
+        const calId = this.dataset.calId;
+        const vendor = this.value;
+        const csrfToken = document.querySelector('input[name="csrf_token"]') ?
+            document.querySelector('input[name="csrf_token"]').value : '';
+        const body = new URLSearchParams({ csrf_token: csrfToken, vendor: vendor });
+        fetch(`/admin/calibration/${calId}/vendor`, { method: 'POST', body })
+            .then(r => {
+                if (r.ok) {
+                    this.style.borderColor = '#22c55e';
+                    setTimeout(() => this.style.borderColor = '', 1500);
+                } else {
+                    alert('Failed to update vendor');
+                    location.reload();
+                }
+            });
+    });
+});
+</script>
 </body>
 </html>

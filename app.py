@@ -225,6 +225,20 @@ def admin_delete_calibration(cal_id):
     return redirect('/admin')
 
 
+@app.route('/admin/calibration/<int:cal_id>/vendor', methods=['POST'])
+@_admin_required
+def admin_update_calibration_vendor(cal_id):
+    if request.form.get('csrf_token') != session.get('csrf_token'):
+        return ('Invalid token', 403)
+    vendor = request.form.get('vendor', 'bruker').strip().lower()
+    if vendor not in ('bruker', 'varian'):
+        return ('Invalid vendor', 400)
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute("UPDATE calibrations SET vendor=? WHERE id=?", (vendor, cal_id))
+    conn.commit()
+    conn.close()
+    return ('', 204)
+
 @app.route('/admin/ui_settings', methods=['POST'])
 @_admin_required
 def admin_ui_settings():
