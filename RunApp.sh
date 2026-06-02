@@ -17,5 +17,6 @@ pip install --upgrade pip
 # Install dependencies
 pip install -r requirements.txt
 
-# Run the web app
-python app.py
+# Run the web app (detached so it survives SSH disconnect)
+nohup python app.py >> app.log 2>&1 </dev/null &
+echo "Started PID $!"
