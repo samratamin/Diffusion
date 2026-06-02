@@ -1,7 +1,7 @@
 import os
 import math
 import zipfile
-from flask import Flask, render_template, request, jsonify, send_file
+from flask import Flask, render_template, request, jsonify, send_file, session, redirect, url_for, flash
 from werkzeug.utils import secure_filename
 import nmrglue as ng
 import plotly.graph_objects as go
@@ -11,6 +11,9 @@ import sqlite3
 from scipy.optimize import curve_fit, minimize_scalar, minimize
 import uuid
 import io
+import hashlib
+import secrets
+from functools import wraps
 from datetime import datetime
 
 # In-memory store for uploaded NMR datasets, keyed by session UUID
@@ -73,6 +76,13 @@ def init_db():
         for name, d_const in defaults:
             cursor.execute("INSERT OR IGNORE INTO standards (name, diffusion_constant) VALUES (?, ?)", (name, d_const))
             
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS admin_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+        """)
+
         conn.commit()
         conn.close()
     except Exception as e:
@@ -80,9 +90,128 @@ def init_db():
 
 init_db()
 
+
+def _get_admin_setting(key):
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        row = conn.execute("SELECT value FROM admin_settings WHERE key=?", (key,)).fetchone()
+        conn.close()
+        return row[0] if row else None
+    except Exception:
+        return None
+
+
+def _set_admin_setting(key, value):
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute("INSERT OR REPLACE INTO admin_settings (key, value) VALUES (?, ?)", (key, value))
+    conn.commit()
+    conn.close()
+
+
+def _get_or_create_secret_key():
+    key = _get_admin_setting('secret_key')
+    if not key:
+        key = secrets.token_hex(32)
+        _set_admin_setting('secret_key', key)
+    return key
+
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = 'uploads'
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+app.secret_key = _get_or_create_secret_key()
+
+# ─── Admin Auth ──────────────────────────────────────────────────────────────
+
+def _hash_password(password, salt=None):
+    if salt is None:
+        salt = secrets.token_hex(32)
+    h = hashlib.sha256((salt + password).encode()).hexdigest()
+    return h, salt
+
+
+def _verify_admin_password(password):
+    stored_hash = _get_admin_setting('password_hash')
+    salt = _get_admin_setting('password_salt')
+    if not stored_hash or not salt:
+        return False  # No password configured yet
+    h, _ = _hash_password(password, salt)
+    return secrets.compare_digest(h, stored_hash)
+
+
+def _admin_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not session.get('admin_logged_in'):
+            return redirect('/admin/login')
+        return f(*args, **kwargs)
+    return decorated
+
+
+@app.route('/admin/login', methods=['GET', 'POST'])
+def admin_login():
+    # Generate a per-session CSRF token
+    if 'csrf_token' not in session:
+        session['csrf_token'] = secrets.token_hex(24)
+    error = None
+    if request.method == 'POST':
+        # Validate CSRF token
+        if request.form.get('csrf_token') != session.get('csrf_token'):
+            error = 'Invalid request. Please try again.'
+        else:
+            password = request.form.get('password', '')
+            if not _get_admin_setting('password_hash'):
+                error = 'No admin password has been set. Run: python manage.py set-password'
+            elif _verify_admin_password(password):
+                session['admin_logged_in'] = True
+                session['csrf_token'] = secrets.token_hex(24)  # rotate after login
+                return redirect('/admin')
+            else:
+                error = 'Incorrect password.'
+    return render_template('admin_login.html',
+                           error=error,
+                           csrf_token=session.get('csrf_token', ''))
+
+
+@app.route('/admin/logout')
+def admin_logout():
+    session.clear()
+    return redirect('/admin/login')
+
+
+@app.route('/admin')
+@_admin_required
+def admin_panel():
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
+    cals = conn.execute(
+        "SELECT id, name, timestamp, max_g_gauss, delta, big_delta, fit_slope, fit_intercept "
+        "FROM calibrations ORDER BY timestamp DESC"
+    ).fetchall()
+    conn.close()
+    if 'csrf_token' not in session:
+        session['csrf_token'] = secrets.token_hex(24)
+    return render_template('admin.html',
+                           calibrations=cals,
+                           csrf_token=session['csrf_token'])
+
+
+@app.route('/admin/calibration/<int:cal_id>/delete', methods=['POST'])
+@_admin_required
+def admin_delete_calibration(cal_id):
+    if request.form.get('csrf_token') != session.get('csrf_token'):
+        flash('Invalid request token.', 'error')
+        return redirect('/admin')
+    conn = sqlite3.connect(DB_FILE)
+    row = conn.execute("SELECT name FROM calibrations WHERE id=?", (cal_id,)).fetchone()
+    if row:
+        conn.execute("DELETE FROM calibrations WHERE id=?", (cal_id,))
+        conn.commit()
+        flash(f'Calibration "{row[0]}" deleted.', 'success')
+    else:
+        flash('Calibration not found.', 'error')
+    conn.close()
+    return redirect('/admin')
+
 
 @app.route('/')
 def index():
@@ -177,25 +306,25 @@ def analyze_diffusion():
         # Formula: G = slope * (fraction) + intercept
         gradients = (m * x_points + c)
         
-        # Determine sequence-specific fitting equation
+        # Get sequence type and gradient shape for equation selection
+        sequence_type = exp_params.get('sequence_type', 'PGSE')
+        gradient_shape = exp_params.get('gradient_shape', 'square')
+        gradient_shape_factor = exp_params.get('gradient_shape_factor', 1.0)
+        # τ: inter-bipolar-gradient delay (non-zero for dbppste/bppste sequences)
+        tau_bipolar = exp_params.get('tau_bipolar', 0.0)
+        
         # 1. Convert G/cm to T/m: 1 G/cm = 0.01 T/m
         g_tesla_m = gradients * 0.01
         
-        # DEFAULT: Basic Stejskal-Tanner (Double Stimulated Echo / BPPG)
-        # Equation: I = I0 * exp(-D * (gamma * g * delta)^2 * (Delta - delta/3 - tau/2...))
-        # Note: 'delta' is already the total gradient duration from param extraction
-        if 'stebpgp' in pulse_program or 'bpp' in pulse_program:
-            # BPP-STE (Bipolar Pulse Pair)
-            # For Bipolar, the factor is (gamma * G * delta)^2 * (Delta - delta/3 - tau/2)
-            # But the 'effective' delta in some literature for Bruker is 2*p30.
-            # Here we follow Bruker's standard: X = (gamma * g * delta)^2 * (Delta - delta/3.0)
-            st_x = (gamma * g_tesla_m * delta)**2 * (big_delta - delta/3.0)
-        elif 'led' in pulse_program:
-             # LED (Longitudinal Eddy Current Delay)
-             st_x = (gamma * g_tesla_m * delta)**2 * (big_delta - delta/3.0)
-        else:
-            # General ST equation
-            st_x = (gamma * g_tesla_m * delta)**2 * (big_delta - delta/3.0)
+        # Apply gradient shape correction factor if using sinusoidal gradients
+        # For sinusoidal gradients, effective g is lower by ~0.9069
+        g_effective = g_tesla_m * gradient_shape_factor
+        
+        # Stejskal-Tanner encoding factor — unified equation for all sequence types:
+        #   PGSE:          X = (γ·g·δ)² · (Δ - δ/3)
+        #   PGSTE bipolar: X = (γ·g·δ)² · (Δ - δ/3 - τ/2)   [dbppste, bppste]
+        # tau_bipolar is 0 for non-bipolar sequences, reducing to standard PGSE form.
+        st_x = (gamma * g_effective * delta)**2 * (big_delta - delta/3.0 - tau_bipolar/2.0)
 
         for target_ppm in peaks_ppm:
             # Find the best index in the PPM array
@@ -460,7 +589,7 @@ def analyze_diffusion():
             # We map from G_min to G_max (physical gradient units)
             g_smooth = np.linspace(0, np.max(gradients), 500)
             g_tesla_m_smooth = g_smooth * 0.01
-            st_x_smooth = (gamma * g_tesla_m_smooth * delta)**2 * (big_delta - delta/3.0)
+            st_x_smooth = (gamma * g_tesla_m_smooth * delta)**2 * (big_delta - delta/3.0 - tau_bipolar/2.0)
             
             fit_intensities_smooth = np.exp(slope * st_x_smooth + intercept)
             
@@ -489,7 +618,11 @@ def analyze_diffusion():
                 'delta': delta,
                 'big_delta': big_delta,
                 'pulse_program': pulse_program,
-                'calibration_name': cal['name']
+                'calibration_name': cal['name'],
+                'sequence_type': exp_params.get('sequence_type', 'PGSE'),
+                'gradient_shape': exp_params.get('gradient_shape', 'square'),
+                'gradient_shape_factor': exp_params.get('gradient_shape_factor', 1.0),
+                'tau_bipolar': exp_params.get('tau_bipolar', 0.0)
             }
         })
     except Exception as e:
@@ -501,7 +634,9 @@ def analyze_diffusion():
 
 def _build_readme(results, params, calibration, vendor, pulse_program,
                   delta, big_delta, ph0, ph1, baseline_order,
-                  peaks_ppm, method, detected_standard, calibration_name):
+                  peaks_ppm, method, detected_standard, calibration_name, lb=1.0, fft_points=None,
+                  sequence_type='PGSE', gradient_shape='square', gradient_shape_factor=1.0,
+                  tau_bipolar=0.0):
     """Build a publication-ready README.txt string."""
     lines = []
     w = lines.append
@@ -518,9 +653,15 @@ def _build_readme(results, params, calibration, vendor, pulse_program,
     w("-" * 78)
     w(f"  Vendor / Format:        {vendor.upper()}")
     w(f"  Pulse Program:          {pulse_program}")
+    w(f"  Sequence Type:          {sequence_type} (Pulsed Gradient {'Spin Echo' if sequence_type == 'PGSE' else 'Stimulated Echo'})")
+    w(f"  Gradient Shape:         {gradient_shape.capitalize()}")
+    if gradient_shape_factor != 1.0:
+        w(f"  Gradient Shape Factor:  {gradient_shape_factor:.4f} (correction applied to effective gradient)")
     w(f"  δ (gradient pulse):     {delta:.6f} s  ({delta*1e6:.2f} μs)")
     w(f"  Δ (diffusion time):     {big_delta:.6f} s  ({big_delta*1e3:.2f} ms)")
-    w(f"  Number of slices:       {len(results[0]['intensities']) if results else 'N/A'}")
+    if tau_bipolar > 0:
+        w(f"  τ (inter-bipolar delay): {tau_bipolar:.6f} s  ({tau_bipolar*1e3:.3f} ms)")
+    w(f"  Number of gradient steps: {len(results[0]['intensities']) if results else 'N/A'}")
     w(f"  Detected standard:      {detected_standard if detected_standard else 'N/A'}")
     w("")
 
@@ -542,9 +683,34 @@ def _build_readme(results, params, calibration, vendor, pulse_program,
     w("-" * 78)
     w(f"  Phase correction (ph0): {ph0:.2f}°")
     w(f"  Phase correction (ph1): {ph1:.2f}°")
-    w(f"  Baseline correction:    {'Polynomial order {baseline_order}' if baseline_order >= 0 else 'None'}")
-    w(f"  Apodization:            Exponential (lb = 15 Hz)")
-    w(f"  Zero-filling:           4×")
+    w(f"  Baseline correction:    {'Polynomial order ' + str(baseline_order) if baseline_order >= 0 else 'None'}")
+    
+    # Calculate zero-fill factor for README
+    n_collected = params.get('n_collected', 0) if params else 0
+    if fft_points and n_collected:
+        zerofill_factor = fft_points / n_collected
+        zerofill_text = f"{zerofill_factor:.1f}×"
+    else:
+        zerofill_text = "4×"
+    
+    w(f"  Apodization:            Exponential (lb = {lb:.1f} Hz)")
+    w(f"  Zero-filling:           {zerofill_text}")
+    
+    # Sequence-specific equation information
+    if sequence_type == 'PGSTE' and tau_bipolar > 0:
+        w(f"  Diffusion equation:     Bipolar PGSTE: X = (γ·g·δ)² · (Δ - δ/3 - τ/2)")
+        w(f"                          τ = {tau_bipolar*1e3:.3f} ms (inter-bipolar delay, Bruker D[21])")
+    elif sequence_type == 'PGSTE':
+        w(f"  Diffusion equation:     PGSTE: X = (γ·g·δ)² · (Δ - δ/3)")
+    else:
+        w(f"  Diffusion equation:     PGSE: X = (γ·g·δ)² · (Δ - δ/3)")
+    
+    if gradient_shape == 'sinusoidal':
+        w(f"  Gradient shape:         Sinusoidal (shaped gradients)")
+        w(f"  Gradient correction:    Applied correction factor {gradient_shape_factor:.4f}")
+    else:
+        w(f"  Gradient shape:         Square (hard gradients)")
+    
     w(f"  Intensity extraction:   {method}")
     w(f"  Selected peaks:         {', '.join(f'{p:.3f} ppm' for p in peaks_ppm)}")
     w("")
@@ -586,7 +752,7 @@ def _build_readme(results, params, calibration, vendor, pulse_program,
         st_x_vals = []
         for g in grads:
             g_t = g * 0.01
-            st = (gamma_const * g_t * delta)**2 * (big_delta - delta/3.0)
+            st = (gamma_const * g_t * delta)**2 * (big_delta - delta/3.0 - tau_bipolar/2.0)
             st_x_vals.append(st)
         for i, (g, st) in enumerate(zip(grads, st_x_vals)):
             w(f"  {i+1:<8} {g:<12.4f} {g:<14.4f} {st:<18.3e}")
@@ -597,7 +763,10 @@ def _build_readme(results, params, calibration, vendor, pulse_program,
     w("-" * 78)
     w("  - D values are extracted from the slope of ln(I/I₀) vs. ST_X using")
     w("    the Stejskal-Tanner equation: I = I₀·exp(-D·ST_X)")
-    w("  - ST_X = (γ·g·δ)²·(Δ - δ/3)  where γ = 2.67522×10⁸ rad/s/T (¹H gyromagnetic ratio)")
+    if tau_bipolar > 0:
+        w(f"  - ST_X = (γ·g·δ)²·(Δ - δ/3 - τ/2)  bipolar correction with τ = {tau_bipolar*1e3:.3f} ms")
+    else:
+        w("  - ST_X = (γ·g·δ)²·(Δ - δ/3)  where γ = 2.67522×10⁸ rad/s/T (¹H gyromagnetic ratio)")
     w("  - Intensities are normalized to I₀ (first slice, lowest gradient).")
     w("  - Points below 0.5% of I₀ are excluded from the fit (noise floor).")
     w("  - For publication, report mean D ± SD with the number of peaks used.")
@@ -709,8 +878,16 @@ def _build_publication_info(results, params, calibration, vendor, pulse_program,
     w(std_line)
     w(cal_line)
     w("")
+    # Calculate zero-fill factor for README
+    n_collected = params.get('n_collected', 0) if params else 0
+    if fft_points and n_collected:
+        zerofill_factor = fft_points / n_collected
+        zerofill_text = f"{zerofill_factor:.1f}×"
+    else:
+        zerofill_text = "4×"
+    
     w(f"Raw time-domain data were apodized with an exponential window")
-    w("(line broadening = 15 Hz), zero-filled four-fold, and Fourier")
+    w(f"(line broadening = {lb:.1f} Hz), zero-filled {zerofill_text}, and Fourier")
     w("transformed. Phase correction was applied (ph0 = "
     f"{ph0:.1f} degrees, ph1 = {ph1:.1f} degrees) with {baseline_desc}.")
     w("")
@@ -758,6 +935,14 @@ def download_analysis():
         delta = data.get('delta', 0.0)
         big_delta = data.get('big_delta', 0.0)
         calibration_name = data.get('calibration_name', 'N/A')
+        lb = data.get('lb', 1.0)
+        fft_points = data.get('fft_points')
+        if fft_points:
+            fft_points = int(fft_points)
+        sequence_type = data.get('sequence_type', 'PGSE')
+        gradient_shape = data.get('gradient_shape', 'square')
+        gradient_shape_factor = data.get('gradient_shape_factor', 1.0)
+        tau_bipolar = float(data.get('tau_bipolar', 0.0))
 
         if not results:
             return jsonify({'error': 'No results to download.'}), 400
@@ -766,8 +951,23 @@ def download_analysis():
         readme_text = _build_readme(
             results, params, calibration, vendor, pulse_program,
             delta, big_delta, ph0, ph1, baseline_order,
-            peaks_ppm, method, detected_standard, calibration_name
+            peaks_ppm, method, detected_standard, calibration_name, lb, fft_points,
+            sequence_type, gradient_shape, gradient_shape_factor,
+            tau_bipolar
         )
+
+        # Optional publication/context metadata bundled with downloads.
+        pub_info_text = "\n".join([
+            "NMR Diffusion Analysis Export",
+            "",
+            f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            f"Vendor: {vendor}",
+            f"Pulse Program: {pulse_program}",
+            f"Calibration: {calibration_name}",
+            "",
+            "This file is included as a placeholder for publication metadata,",
+            "instrument notes, and citation details.",
+        ])
 
         # ── Build CSV data for each peak ──
         csv_parts = []
@@ -824,64 +1024,136 @@ def download_analysis():
         import matplotlib
         matplotlib.use('Agg')  # Non-interactive backend
         import matplotlib.pyplot as plt
-        import matplotlib.ticker as mticker
         from io import BytesIO as Bio
 
         plot_images = {}
-
-        # ── Plot 1: Decay curves (all peaks with fit lines) ──
-        fig, ax = plt.subplots(figsize=(8, 5.5), dpi=150)
         colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd',
                   '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf']
+
+        # ── Plot 1: Decay curves matched to on-screen plot (linear axes) ──
+        fig, ax = plt.subplots(figsize=(8, 5.5), dpi=150)
         for idx, r in enumerate(results):
             color = colors[idx % len(colors)]
-            # Experimental points (use first 50 for clarity)
-            n_pts = min(len(r['intensities']), 100)
-            ax.scatter(r['gradients'][:n_pts], r['intensities'][:n_pts],
-                       s=25, color=color, label=f"{r['ppm']:.3f} ppm",
-                       zorder=3, alpha=0.85)
-            # Fit line
-            ax.plot(r['fit_line']['x'], r['fit_line']['y'],
-                    color=color, linewidth=1.5, linestyle='--', alpha=0.7, zorder=2)
+            gradients = np.array(r.get('gradients', []), dtype=float)
+            intensities = np.array(r.get('intensities', []), dtype=float)
+            if len(gradients) == 0 or len(intensities) == 0:
+                continue
+
+            ax.scatter(
+                gradients,
+                intensities,
+                s=22,
+                color=color,
+                alpha=0.9,
+                label=f"{float(r['ppm']):.3f} ppm",
+                zorder=3,
+            )
+
+            if r.get('fit_line') and r['fit_line'].get('x') and r['fit_line'].get('y'):
+                ax.plot(
+                    np.array(r['fit_line']['x'], dtype=float),
+                    np.array(r['fit_line']['y'], dtype=float),
+                    color=color,
+                    linewidth=2.0,
+                    alpha=0.9,
+                    zorder=2,
+                )
+            elif r.get('fit_intensities'):
+                ax.plot(
+                    gradients,
+                    np.array(r['fit_intensities'], dtype=float),
+                    color=color,
+                    linewidth=1.5,
+                    linestyle='--',
+                    alpha=0.8,
+                    zorder=2,
+                )
+
         ax.set_xlabel('Gradient Strength (G/cm)', fontsize=11, fontweight='bold')
-        ax.set_ylabel('Normalized Intensity (I/I₀)', fontsize=11, fontweight='bold')
-        ax.set_title('Diffusion Decay Curves', fontsize=12, fontweight='bold', pad=10)
-        ax.legend(fontsize=8, loc='upper right', framealpha=0.9)
-        ax.set_yscale('log')
-        ax.set_xscale('log')
-        ax.grid(True, alpha=0.3, which='both')
+        ax.set_ylabel('Normalized Intensity (I/I0)', fontsize=11, fontweight='bold')
+        ax.set_title('Decay Fit (Export Matched to UI)', fontsize=12, fontweight='bold', pad=10)
+        ax.grid(True, alpha=0.3)
+        ax.legend(fontsize=8, loc='best', framealpha=0.9)
         ax.tick_params(axis='both', which='major', labelsize=9)
         plt.tight_layout()
         buf = Bio()
         fig.savefig(buf, format='png', bbox_inches='tight')
         plt.close(fig)
         buf.seek(0)
-        plot_images['decay_curves.png'] = buf.getvalue()
+        plot_images['decay_fit_ui_matched.png'] = buf.getvalue()
 
-        # ── Plot 2: Semi-log decay (ln(I/I₀) vs ST_X for linear fit) ──
+        # ── Plot 2: Semi-log linearization (ln(I/I0) vs ST encoding factor) ──
         fig, ax = plt.subplots(figsize=(8, 5.5), dpi=150)
         for idx, r in enumerate(results):
             color = colors[idx % len(colors)]
-            n_pts = min(len(r['intensities']), 100)
-            ax.scatter(r['gradients'][:n_pts], r['intensities'][:n_pts],
-                       s=25, color=color, label=f"{r['ppm']:.3f} ppm",
-                       zorder=3, alpha=0.85)
-            ax.plot(r['fit_line']['x'], r['fit_line']['y'],
-                    color=color, linewidth=1.5, linestyle='--', alpha=0.7, zorder=2)
-        ax.set_xlabel('Gradient Strength (G/cm)', fontsize=11, fontweight='bold')
-        ax.set_ylabel('ln(I/I₀)', fontsize=11, fontweight='bold')
-        ax.set_title('Semi-log Decay (Linear Fit Region)', fontsize=12, fontweight='bold', pad=10)
-        ax.legend(fontsize=8, loc='upper right', framealpha=0.9)
-        ax.set_xscale('log')
-        ax.grid(True, alpha=0.3, which='both')
+            gradients_gcm = np.array(r.get('gradients', []), dtype=float)
+            intensities = np.array(r.get('intensities', []), dtype=float)
+            if len(gradients_gcm) == 0 or len(intensities) == 0:
+                continue
+
+            # 1 G/cm = 0.01 T/m
+            g_tm = gradients_gcm * 0.01
+            st_x = (gamma_const * g_tm * delta) ** 2 * (big_delta - delta / 3.0 - tau_bipolar / 2.0)
+
+            mask = np.isfinite(st_x) & np.isfinite(intensities) & (intensities > 0)
+            if np.sum(mask) < 2:
+                continue
+
+            x_use = st_x[mask]
+            y_use = np.log(intensities[mask])
+            ax.scatter(x_use, y_use, s=20, color=color, alpha=0.9,
+                       label=f"{float(r['ppm']):.3f} ppm", zorder=3)
+
+            # Draw a linear trend in ST-space for visual verification.
+            m_fit, b_fit = np.polyfit(x_use, y_use, 1)
+            x_line = np.linspace(float(np.min(x_use)), float(np.max(x_use)), 200)
+            y_line = m_fit * x_line + b_fit
+            ax.plot(x_line, y_line, color=color, linewidth=1.8, alpha=0.85, zorder=2)
+
+        ax.set_xlabel('Stejskal-Tanner Encoding Factor', fontsize=11, fontweight='bold')
+        ax.set_ylabel('ln(I/I0)', fontsize=11, fontweight='bold')
+        ax.set_title('Semi-log Decay Linearization', fontsize=12, fontweight='bold', pad=10)
+        ax.grid(True, alpha=0.3)
+        ax.legend(fontsize=8, loc='best', framealpha=0.9)
         ax.tick_params(axis='both', which='major', labelsize=9)
         plt.tight_layout()
         buf = Bio()
         fig.savefig(buf, format='png', bbox_inches='tight')
         plt.close(fig)
-        plot_images['semi_log_decay.png'] = buf.getvalue()
+        plot_images['semi_log_st_linearization.png'] = buf.getvalue()
 
-        # ── Plot 3: Results summary bar chart (D values with error bars) ──
+        # ── Plot 3: Angled stacked spectra (processed/phased data) ──
+        if ppm_array and raw_spectra:
+            fig, ax = plt.subplots(figsize=(9, 5.5), dpi=150)
+            ppm_np = np.array(ppm_array, dtype=float)
+            first_slice = np.array(raw_spectra[0], dtype=float)
+            norm_factor = float(np.max(np.abs(first_slice))) if len(first_slice) else 1.0
+            if norm_factor == 0:
+                norm_factor = 1.0
+
+            for i, sp in enumerate(raw_spectra):
+                sp_np = np.array(sp, dtype=float)
+                if len(sp_np) != len(ppm_np):
+                    continue
+                y_offset = i * 0.05
+                x_shift = i * 0.1
+                x_plot = ppm_np - x_shift
+                y_plot = (sp_np / norm_factor) + y_offset
+                ax.plot(x_plot, y_plot, linewidth=1.1, color=colors[i % len(colors)], alpha=0.9)
+
+            ax.set_xlabel('Chemical Shift (ppm)', fontsize=11, fontweight='bold')
+            ax.set_ylabel('Normalized Intensity + Offset', fontsize=11, fontweight='bold')
+            ax.set_title('Angled Stacked Spectra (Processed/Phased)', fontsize=12, fontweight='bold', pad=10)
+            ax.invert_xaxis()
+            ax.grid(True, alpha=0.2)
+            ax.tick_params(axis='both', which='major', labelsize=9)
+            plt.tight_layout()
+            buf = Bio()
+            fig.savefig(buf, format='png', bbox_inches='tight')
+            plt.close(fig)
+            plot_images['stacked_spectra_angled.png'] = buf.getvalue()
+
+        # ── Plot 4: Results summary bar chart (D values with error bars) ──
         if results:
             d_vals = [r['d_value'] for r in results]
             ppm_labels = [f"{r['ppm']:.2f}" for r in results]
@@ -904,7 +1176,7 @@ def download_analysis():
             plt.close(fig)
             plot_images['diffusion_coefficients.png'] = buf.getvalue()
 
-        # ── Plot 4: Calibration curve (if calibration data available) ──
+        # ── Plot 5: Calibration curve (if calibration data available) ──
         if calibration and calibration.get('slope') is not None:
             fig, ax = plt.subplots(figsize=(8, 5.5), dpi=150)
             # Simulated calibration line
@@ -1025,12 +1297,35 @@ def phase_spectrum():
         ph0       = float(data.get('ph0', 0.0))
         ph1       = float(data.get('ph1', 0.0))
         pivot_ppm = data.get('pivot_ppm')
+        lb        = float(data.get('lb', 1.0))  # apodization parameter
+        fft_points = data.get('fft_points')
+        if fft_points:
+            fft_points = int(fft_points)
 
         plot_data = _nmr_data_store.get(data_id)
         if not plot_data or '_complex_spectra' not in plot_data:
             return jsonify({'error': 'Data not found or no complex spectra stored'}), 404
 
-        complex_arr = np.array(plot_data['_complex_spectra'])  # (n_slices, n_pts)
+        # Re-compute complex spectra if apodization or FFT points have changed
+        if (lb != 1.0 or fft_points) and '_raw_fid_slices' in plot_data:
+            raw_fid_slices = plot_data['_raw_fid_slices']
+            n_collected = plot_data.get('_n_collected', len(raw_fid_slices[0]) if raw_fid_slices else 0)
+            n_fft_default = n_collected * 4
+            n_fft = fft_points if fft_points else n_fft_default
+            
+            # Re-process FID slices with new parameters
+            complex_arr = []
+            for trace in raw_fid_slices:
+                # Apply exponential apodization with the provided lb value
+                window = np.exp(-lb * np.pi * np.arange(len(trace)) / len(trace))
+                trace_win = trace * window
+                # FFT with variable zero-filling
+                sp = np.fft.fftshift(np.fft.fft(trace_win, n_fft))
+                complex_arr.append(sp)
+            complex_arr = np.array(complex_arr)
+        else:
+            complex_arr = np.array(plot_data['_complex_spectra'])
+
         ppm = np.array(plot_data['raw_ppm'])
 
         phased = _apply_phase(complex_arr, ph0, ph1, ppm,
@@ -1110,10 +1405,34 @@ def apply_processing():
         pivot_ppm      = data.get('pivot_ppm')
         baseline_order = int(data.get('baseline_order', -1))
         preview        = bool(data.get('preview', False))
+        lb             = float(data.get('lb', 1.0))  # apodization parameter
+        fft_points     = data.get('fft_points')
+        if fft_points:
+            fft_points = int(fft_points)
 
         plot_data = _nmr_data_store.get(data_id)
         if not plot_data or '_complex_spectra' not in plot_data:
             return jsonify({'error': 'Data not found or complex spectra unavailable'}), 404
+
+        # Re-compute complex spectra if apodization or FFT points have changed
+        if (lb != 1.0 or fft_points) and '_raw_fid_slices' in plot_data:
+            raw_fid_slices = plot_data['_raw_fid_slices']
+            n_collected = plot_data.get('_n_collected', len(raw_fid_slices[0]) if raw_fid_slices else 0)
+            n_fft_default = n_collected * 4
+            n_fft = fft_points if fft_points else n_fft_default
+            
+            # Re-process FID slices with new parameters
+            complex_spectra = []
+            for trace in raw_fid_slices:
+                # Apply exponential apodization with the provided lb value
+                window = np.exp(-lb * np.pi * np.arange(len(trace)) / len(trace))
+                trace_win = trace * window
+                # FFT with variable zero-filling
+                sp = np.fft.fftshift(np.fft.fft(trace_win, n_fft))
+                complex_spectra.append(sp)
+            
+            # Update stored complex spectra
+            plot_data['_complex_spectra'] = complex_spectra
 
         complex_arr = np.array(plot_data['_complex_spectra'])
         ppm = np.array(plot_data['raw_ppm'])
@@ -1133,14 +1452,28 @@ def apply_processing():
             n_pts = phased.shape[1]
             pts_idx = np.arange(n_pts)
             for i, sp in enumerate(phased):
-                threshold = float(np.max(np.abs(sp))) * 0.05
-                mask = np.abs(sp) < threshold
+                abs_sp = np.abs(sp)
+                threshold = float(np.max(abs_sp)) * 0.05
+                edge_width = max(int(n_pts * 0.1), baseline_order + 2)
+                edge_mask = (pts_idx < edge_width) | (pts_idx >= n_pts - edge_width)
+                low_signal_mask = abs_sp < threshold
+                mask = edge_mask | low_signal_mask
+
                 if np.sum(mask) > baseline_order + 1:
                     coeffs = np.polyfit(pts_idx[mask], sp[mask], baseline_order)
                     bl = np.polyval(coeffs, pts_idx)
-                    corrected[i] = sp - bl
-                    if i == 0:
-                        baseline_0 = bl
+                    candidate = sp - bl
+
+                    original_max = float(np.max(np.abs(sp)))
+                    candidate_max = float(np.max(np.abs(candidate)))
+                    if original_max > 0 and candidate_max < original_max * 0.2:
+                        corrected[i] = sp
+                        if i == 0:
+                            baseline_0 = None
+                    else:
+                        corrected[i] = candidate
+                        if i == 0:
+                            baseline_0 = bl
                 else:
                     corrected[i] = sp
         else:
@@ -1262,7 +1595,88 @@ def find_bruker_or_varian(base_dir):
             return 'varian', root
     return None, None
 
-def process_nmr_data(extract_dir):
+def detect_sequence_type(pulse_program):
+    """
+    Detect the diffusion pulse sequence type from pulse program name.
+    
+    PGSE variants (Pulsed Gradient Spin Echo):
+    - stebpgp1s, bipgp*, pgse, ged, zg_pulsed_eff, ledbpgp2s
+    Equation: ST_X = (γ·g·δ)² · (Δ - δ/3)
+    
+    PGSTE variants (Pulsed Gradient Stimulated Echo):
+    - sted, bppgste, pgste, stimulated
+    Equation: ST_X = (γ·g·δ)² · (Δ - δ/3 - δ₂/2)  [requires storage pulse duration δ₂]
+    Note: Bruker typically uses Δ - δ/3 for PGSTE as well in practice
+    """
+    pulse_program = str(pulse_program).lower().strip()
+    
+    # Stimulated echo variants — includes bipolar PGSTE (dbppste, bppste, dbppste_cc)
+    if any(x in pulse_program for x in ['sted', 'pgste', 'stimulated', 'ppste', 'bppste']):
+        return 'PGSTE'
+    elif any(x in pulse_program for x in ['stebpgp', 'bipgp', 'pgse', 'ged', 'led', 'bppgp']):
+        return 'PGSE'
+    else:
+        return 'PGSE'  # Default to PGSE for unknown sequences
+
+def detect_gradient_shape(pulse_program, dic=None, params=None):
+    """
+    Detect gradient shape from Bruker GPNAM parameter (when available), falling
+    back to pulse program name heuristics.
+
+    shape_factor is applied as: g_eff = g_nominal * shape_factor
+    This corrects for the reduced effective gradient area of shaped pulses.
+
+    Shape factors (first-moment / area relative to rectangular pulse):
+      square / SMSQ* : ~1.0  (Smoothed Square is effectively rectangular)
+      sinusoidal SINE: 2/π ≈ 0.6366
+      gaussian       : ~0.7  (approximate)
+    """
+    TWO_OVER_PI = 2.0 / math.pi  # ≈ 0.6366 — true sinusoidal correction
+
+    # ── 1. Read actual GPNAM from Bruker dic ─────────────────────────────────
+    if dic is not None:
+        acqus = dic.get('acqus', {})
+        gpnam_raw = acqus.get('GPNAM', [])
+
+        # nmrglue parses GPNAM as a list of strings (brackets stripped)
+        if isinstance(gpnam_raw, (list, tuple)):
+            shapes = [str(s).strip() for s in gpnam_raw
+                      if str(s).strip() and str(s).strip() not in ('', '<>')]
+        else:
+            # Fallback: raw string — parse <name> tokens manually
+            import re as _re
+            shapes = [m for m in _re.findall(r'<([^>]+)>', str(gpnam_raw)) if m.strip()]
+
+        if shapes:
+            # Use the most common non-empty shape name
+            from collections import Counter
+            most_common = Counter(shapes).most_common(1)[0][0].lower()
+            if most_common.startswith('smsq') or 'smooth' in most_common:
+                # Smoothed-square (e.g. SMSQ10.100): effectively rectangular
+                return 'square', 1.0
+            elif most_common.startswith('sine') or most_common.startswith('sin.'):
+                return 'sinusoidal', TWO_OVER_PI
+            elif 'gauss' in most_common:
+                return 'gaussian', 0.70
+            else:
+                # Unknown shape — treat as square (conservative)
+                return 'square', 1.0
+
+    # ── 2. Fallback: infer from pulse program name ────────────────────────────
+    pulse_program = str(pulse_program).lower().strip()
+
+    if any(x in pulse_program for x in ['square', 'sqr', 'hard', 'rect']):
+        return 'square', 1.0
+    if any(x in pulse_program for x in ['sine', 'smooth', 'shaped']):
+        return 'sinusoidal', TWO_OVER_PI
+
+    # Common Bruker DOSY sequences default to SMSQ gradients → treat as square
+    if any(x in pulse_program for x in ['stebpgp', 'bipgp', 'ledbpgp', 'dstegp', 'sted']):
+        return 'square', 1.0
+
+    return 'square', 1.0
+
+def process_nmr_data(extract_dir, lb=1.0, fft_points=None):
     vendor, data_path = find_bruker_or_varian(extract_dir)
 
     if not vendor:
@@ -1319,6 +1733,12 @@ def process_nmr_data(extract_dir):
                 val_d20 = get_bruker_item(dic, acqus_path, 'D', 20)
                 if val_d20 is not None:
                     params['big_delta'] = val_d20
+
+                # D[21] is the inter-bipolar-gradient delay τ used in
+                # bipolar PGSTE sequences (dbppste, bppste)
+                val_d21 = get_bruker_item(dic, acqus_path, 'D', 21)
+                if val_d21 is not None:
+                    params['tau_bipolar'] = val_d21
             # Check for difflist
             difflist_path = os.path.join(data_path, 'difflist')
             if os.path.exists(difflist_path):
@@ -1439,7 +1859,15 @@ def process_nmr_data(extract_dir):
 
         # --- Pulse sequence name ---
         seqfil = get_pp('seqfil', default='unknown', as_str=True)
-        params['pulse_program'] = seqfil.lower().strip('"\'')
+        pulse_program = seqfil.lower().strip('"\'')
+        params['pulse_program'] = pulse_program
+        
+        # Detect sequence type and gradient shape for analysis
+        sequence_type = detect_sequence_type(pulse_program)
+        gradient_shape, gradient_shape_factor = detect_gradient_shape(pulse_program, params=params)
+        params['sequence_type'] = sequence_type
+        params['gradient_shape'] = gradient_shape
+        params['gradient_shape_factor'] = gradient_shape_factor
 
         # --- Spectrometer frequency, spectral width, and transmitter offset ---
         sfrq_v = get_pp('sfrq', default=None)   # MHz
@@ -1501,6 +1929,13 @@ def process_nmr_data(extract_dir):
 
         # Extract Pulse Program name
         params['pulse_program'] = pulse_program if pulse_program else "Unknown"
+        
+        # Detect sequence type and gradient shape for analysis
+        sequence_type = detect_sequence_type(pulse_program)
+        gradient_shape, gradient_shape_factor = detect_gradient_shape(pulse_program, dic=dic, params=params)
+        params['sequence_type'] = sequence_type
+        params['gradient_shape'] = gradient_shape
+        params['gradient_shape_factor'] = gradient_shape_factor
 
         if 'd2o' in folder_search or 'd2o' in pulse_program:
             detected_standard = 'D2O'
@@ -1522,13 +1957,18 @@ def process_nmr_data(extract_dir):
     # Calculate magnitude spectra for all slices
     processed_spectra = []  # magnitude for stacked display
     complex_spectra = []    # complex for server-side phase correction
+    
+    # Determine FFT size: use provided fft_points or default to 4x zero-filling
+    n_collected = len(slices[0]) if slices else 0
+    n_fft_default = n_collected * 4
+    n_fft = fft_points if fft_points else n_fft_default
+    
     for i, trace in enumerate(slices):
-        # 1. Exponential apodization (lb=15)
-        window = np.exp(-15 * np.arange(len(trace)) / len(trace))
+        # 1. Exponential apodization with user-specified line broadening (default lb=1 Hz)
+        window = np.exp(-lb * np.pi * np.arange(len(trace)) / len(trace))
         trace_win = trace * window
 
-        # 2. FT with 4x zero-filling
-        n_fft = len(trace) * 4
+        # 2. FT with variable zero-filling
         sp = np.fft.fftshift(np.fft.fft(trace_win, n_fft))
         processed_spectra.append(np.abs(sp))
         complex_spectra.append(sp)  # retain complex for phase correction
@@ -1622,7 +2062,13 @@ def process_nmr_data(extract_dir):
         'difframp': difframp,
         'exp_params': params,
         'detected_standard': detected_standard,
-        '_complex_spectra': complex_spectra  # numpy arrays; stripped before browser response
+        'initial_processing_lb': lb,
+        'initial_processing_fft_points': fft_points,
+        'processing_lb': lb,
+        'processing_fft_points': fft_points,
+        '_complex_spectra': complex_spectra,  # numpy arrays; stripped before browser response
+        '_raw_fid_slices': slices,  # raw FID data; kept server-side for re-processing
+        '_n_collected': n_collected  # number of collected FID points
     }
 
 @app.route('/get_calibrations', methods=['GET'])
@@ -1698,13 +2144,17 @@ def analyze_peak():
         diff_ramp = np.linspace(0.02, 0.95, len(intensities))
     
     vendor = exp_params.get('vendor', 'bruker')
+    TAU_BIPOLAR = float(exp_params.get('tau_bipolar', 0.0) or 0.0)
+    GRADIENT_SHAPE_FACTOR = float(exp_params.get('gradient_shape_factor', 1.0) or 1.0)
+    SEQUENCE_TYPE = exp_params.get('sequence_type', 'PGSE')
+    GRADIENT_SHAPE = exp_params.get('gradient_shape', 'square')
 
     if vendor == 'varian':
         # Varian: diff_ramp contains raw DAC units (e.g. 100 … 32000).
         # Fit gcal = G/cm per DAC unit.  g(T/m) = dac * gcal * 0.01
         def stejskal_tanner(dac_val, I0, gcal_gcm_per_dac):
-            g_tm = dac_val * gcal_gcm_per_dac * 0.01   # G/cm/DAC * 0.01 T/m/(G/cm)
-            b_value = (GAMMA * g_tm * DELTA)**2 * (BIG_DELTA - DELTA / 3.0)
+            g_tm = dac_val * gcal_gcm_per_dac * 0.01 * GRADIENT_SHAPE_FACTOR
+            b_value = (GAMMA * g_tm * DELTA)**2 * (BIG_DELTA - DELTA / 3.0 - TAU_BIPOLAR / 2.0)
             return I0 * np.exp(-D_known * b_value)
 
         # Initial guess: assume ~40 G/cm max at the highest DAC value
@@ -1715,8 +2165,8 @@ def analyze_peak():
     else:
         # Bruker: diff_ramp is 0-1 fraction; fit g_scale = max gradient in T/m
         def stejskal_tanner(ramp_val, I0, g_scale):
-            g = ramp_val * g_scale
-            b_value = (GAMMA * g * DELTA)**2 * (BIG_DELTA - DELTA / 3.0)
+            g = ramp_val * g_scale * GRADIENT_SHAPE_FACTOR
+            b_value = (GAMMA * g * DELTA)**2 * (BIG_DELTA - DELTA / 3.0 - TAU_BIPOLAR / 2.0)
             return I0 * np.exp(-D_known * b_value)
 
         p0_cal = [intensities[0], 0.5]
@@ -1766,6 +2216,10 @@ def analyze_peak():
         'fit_intercept': float(intercept),
         'delta': DELTA,
         'big_delta': BIG_DELTA,
+        'tau_bipolar': TAU_BIPOLAR,
+        'gradient_shape_factor': GRADIENT_SHAPE_FACTOR,
+        'sequence_type': SEQUENCE_TYPE,
+        'gradient_shape': GRADIENT_SHAPE,
         'difflist': data.get('difflist', []),
         'vendor': vendor
     })

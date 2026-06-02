@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin — NMR Diffusion Analysis</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            background: #f0f2f5;
+            color: #333;
+            font-size: 0.9375rem;
+        }
+        .header {
+            background: #1e1b4b;
+            color: white;
+            padding: 0 2rem;
+            height: 56px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .header-left { display: flex; align-items: center; gap: 0.75rem; }
+        .header-badge {
+            font-size: 0.65rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            background: rgba(255,255,255,0.15);
+            padding: 0.2rem 0.5rem;
+            border-radius: 4px;
+        }
+        .header h1 { font-size: 1rem; font-weight: 600; }
+        .header-actions { display: flex; gap: 1rem; align-items: center; }
+        .header-actions a {
+            color: rgba(255,255,255,0.7);
+            text-decoration: none;
+            font-size: 0.875rem;
+            transition: color 0.15s;
+        }
+        .header-actions a:hover { color: white; }
+        .container { max-width: 1100px; margin: 2rem auto; padding: 0 1.5rem; }
+        .flash {
+            padding: 0.75rem 1rem;
+            border-radius: 8px;
+            margin-bottom: 1.25rem;
+            font-size: 0.875rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .flash.error { background: #fff5f5; color: #c53030; border: 1.5px solid #feb2b2; }
+        .flash.success { background: #f0fff4; color: #276749; border: 1.5px solid #9ae6b4; }
+        .card {
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+            overflow: hidden;
+        }
+        .card-header {
+            padding: 1.1rem 1.5rem;
+            border-bottom: 1px solid #f0f0f0;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .card-header h2 {
+            font-size: 0.8rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.07em;
+            color: #555;
+        }
+        .cal-count {
+            font-size: 0.75rem;
+            background: #f0f2f5;
+            color: #666;
+            padding: 0.2rem 0.6rem;
+            border-radius: 20px;
+            font-weight: 600;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        thead th {
+            text-align: left;
+            padding: 0.65rem 1.5rem;
+            font-size: 0.72rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: #999;
+            background: #fafafa;
+            border-bottom: 1px solid #f0f0f0;
+        }
+        tbody td {
+            padding: 0.85rem 1.5rem;
+            border-bottom: 1px solid #f7f7f7;
+            font-size: 0.875rem;
+            vertical-align: middle;
+        }
+        tbody tr:last-child td { border-bottom: none; }
+        tbody tr:hover td { background: #fafbff; }
+        .cal-name { font-weight: 600; color: #1e1b4b; }
+        .cal-date { color: #888; font-size: 0.8125rem; }
+        .mono { font-family: "SF Mono", "Fira Code", monospace; font-size: 0.8125rem; color: #444; }
+        .empty {
+            padding: 3rem 1.5rem;
+            text-align: center;
+            color: #aaa;
+            font-size: 0.875rem;
+        }
+        .btn-delete {
+            background: white;
+            border: 1.5px solid #e53e3e;
+            color: #e53e3e;
+            padding: 0.35rem 0.85rem;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.8rem;
+            font-weight: 600;
+            transition: all 0.15s;
+            white-space: nowrap;
+        }
+        .btn-delete:hover { background: #e53e3e; color: white; }
+        .td-action { width: 90px; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-left">
+            <h1>NMR Diffusion Analysis</h1>
+            <span class="header-badge">Admin</span>
+        </div>
+        <div class="header-actions">
+            <a href="/">← Back to app</a>
+            <a href="/admin/logout">Log out</a>
+        </div>
+    </div>
+
+    <div class="container">
+        {% with messages = get_flashed_messages(with_categories=True) %}
+          {% for category, message in messages %}
+            <div class="flash {{ category }}">{{ message }}</div>
+          {% endfor %}
+        {% endwith %}
+
+        <div class="card">
+            <div class="card-header">
+                <h2>Gradient Calibrations</h2>
+                <span class="cal-count">{{ calibrations | length }} stored</span>
+            </div>
+
+            {% if calibrations %}
+            <table>
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Created</th>
+                        <th>Max G (G/cm)</th>
+                        <th>δ (ms)</th>
+                        <th>Δ (ms)</th>
+                        <th>Slope</th>
+                        <th>Intercept</th>
+                        <th class="td-action"></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for cal in calibrations %}
+                    <tr>
+                        <td><span class="cal-name">{{ cal['name'] }}</span></td>
+                        <td><span class="cal-date">{{ cal['timestamp'] }}</span></td>
+                        <td class="mono">{{ "%.3f" | format(cal['max_g_gauss']) }}</td>
+                        <td class="mono">{{ "%.3f" | format(cal['delta'] * 1000) if cal['delta'] else "—" }}</td>
+                        <td class="mono">{{ "%.1f" | format(cal['big_delta'] * 1000) if cal['big_delta'] else "—" }}</td>
+                        <td class="mono">{{ "%.5f" | format(cal['fit_slope']) if cal['fit_slope'] else "—" }}</td>
+                        <td class="mono">{{ "%.5f" | format(cal['fit_intercept']) if cal['fit_intercept'] else "—" }}</td>
+                        <td class="td-action">
+                            <form method="POST" action="/admin/calibration/{{ cal['id'] }}/delete"
+                                  data-calname="{{ cal['name'] | e }}"
+                                  onsubmit="return confirm('Delete calibration \u201c' + this.dataset.calname + '\u201d?\n\nThis cannot be undone.')">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                <button type="submit" class="btn-delete">Delete</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <div class="empty">No calibrations stored yet.</div>
+            {% endif %}
+        </div>
+    </div>
+</body>
+</html>

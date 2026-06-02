@@ -6,6 +6,8 @@
     <title>NMR Diffusion Analysis</title>
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     <!-- Plotly -->
     <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
     <style>
@@ -29,9 +31,10 @@
         <h1 class="text-4xl font-extrabold mb-8 text-center text-blue-700">NMR Diffusion Analysis</h1>
 
         <!-- Workflow Selection -->
-        <div class="flex border-b mb-8">
+        <div class="flex items-center border-b mb-8">
             <button onclick="switchTab('calibration')" id="tab-calibration" class="tab-btn px-6 py-3 font-semibold text-gray-500 hover:text-blue-600 transition-all">1. Gradient Calibration</button>
             <button onclick="switchTab('analysis')" id="tab-analysis" class="tab-btn px-6 py-3 font-semibold text-gray-500 hover:text-blue-600 active transition-all">2. Diffusion Analysis</button>
+            <a href="/admin" title="Admin panel" class="ml-auto mr-1 mb-1 p-2 text-gray-300 hover:text-gray-500 transition-colors rounded-lg hover:bg-gray-100"><i class="fas fa-cog text-base"></i></a>
         </div>
 
         <!-- Section 1: Calibration -->
@@ -136,10 +139,15 @@
                             <!-- Parameters Box -->
                             <div id="params-info" class="text-xs space-y-2 p-4 bg-blue-50 rounded-xl border border-blue-100 mb-4"></div>
                             
-                            <!-- Save Button (Normal size, bottom of meta) -->
-                            <button id="btn-save-calib" class="w-full bg-blue-600 text-white py-2.5 rounded-xl text-sm font-bold hover:bg-blue-700 shadow-md transition-all active:scale-95 mb-6">
-                                Save Calibration
-                            </button>
+                            <!-- Save + Download Buttons -->
+                            <div class="flex gap-2 mb-6">
+                                <button id="btn-save-calib" class="flex-1 bg-blue-600 text-white py-2.5 rounded-xl text-sm font-bold hover:bg-blue-700 shadow-md transition-all active:scale-95">
+                                    Save Calibration
+                                </button>
+                                <button id="btn-download-calib" onclick="downloadCalibrationReport()" title="Download calibration report as text file" class="flex-1 bg-gray-100 text-gray-700 py-2.5 rounded-xl text-sm font-bold hover:bg-gray-200 shadow-sm transition-all active:scale-95 flex items-center justify-center gap-1.5">
+                                    <i class="fas fa-download text-xs"></i> Download
+                                </button>
+                            </div>
                             
                             <!-- Expanded Table -->
                             <div class="flex-grow flex flex-col min-h-0">
@@ -240,12 +248,12 @@
                     <span id="wizard-label-3" class="text-[10px] font-black uppercase tracking-widest text-gray-400">Peak Selection</span>
                 </div>
 
-                <!-- Step 1: Phase Correction -->
+                <!-- Step 1: Phase Correction and Apodization -->
                 <div id="proc-step-1" class="bg-white rounded-3xl border border-gray-200 p-6 shadow-sm">
                     <div class="flex justify-between items-start mb-4">
                         <div>
-                            <h3 class="text-xl font-bold text-gray-800">Phase Correction</h3>
-                            <p class="text-xs text-gray-400 mt-1 max-w-xl">Raw FID data is loaded and Fourier transformed. Use sliders to rotate the complex spectrum so peaks appear as positive absorptive lines — this is critical for accurate baseline and area integration.</p>
+                            <h3 class="text-xl font-bold text-gray-800">Phase Correction and Apodization</h3>
+                            <p class="text-xs text-gray-400 mt-1 max-w-xl">Raw FID data is apodized, Fourier transformed, and zero-filled. Use sliders to rotate the complex spectrum so peaks appear as positive absorptive lines — this is critical for accurate baseline and area integration.</p>
                         </div>
                         <button onclick="autoPhaseSpectrum()" id="btn-auto-phase" class="ml-4 px-4 py-2 bg-purple-600 text-white text-[10px] font-black uppercase tracking-widest rounded-xl hover:bg-purple-700 shadow-sm transition-all whitespace-nowrap">
                             ⚡ Auto Phase
@@ -266,6 +274,25 @@
                             </label>
                             <input type="range" id="ph1-slider" min="-1080" max="1080" step="1" value="0"
                                 oninput="onPhaseSliderChange()" class="w-full accent-blue-600 h-2 cursor-pointer">
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-4">
+                        <div>
+                            <label class="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">
+                                Apodization (Line Broadening): <span id="lb-value" class="text-green-600 font-mono">1.0</span> Hz
+                            </label>
+                            <input type="range" id="lb-slider" min="0" max="50" step="0.5" value="1"
+                                oninput="onApodizationSliderChange()" class="w-full accent-green-600 h-2 cursor-pointer">
+                            <p class="text-[9px] text-gray-400 mt-1">Default: 1 Hz (minimal peak broadening)</p>
+                        </div>
+                        <div>
+                            <label class="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">
+                                FFT Points (Zero-filling)
+                            </label>
+                            <select id="fft-points-select" onchange="onFFTPointsChange()" class="w-full border border-gray-300 rounded-lg p-2 bg-white text-xs font-medium focus:outline-none focus:border-green-400">
+                                <option value="">-- Auto (4× collected) --</option>
+                            </select>
+                            <p class="text-[9px] text-gray-400 mt-1" id="fft-info-text">Points collected: <span id="collected-points">loading...</span></p>
                         </div>
                     </div>
                     <div class="flex flex-wrap items-center gap-4 mt-3 pt-3 border-t border-gray-100">
@@ -441,6 +468,10 @@
                                         <p id="info-calname" class="text-xs font-bold text-gray-600">-</p>
                                     </div>
                                 </div>
+                                <div id="info-equation-banner" class="hidden mt-2 px-4 py-2 rounded-lg text-[10px] font-mono border">
+                                    <span class="font-black uppercase tracking-wider text-[9px] mr-2">b-factor:</span>
+                                    <span id="info-equation-text"></span>
+                                </div>
 
                                 <div id="analysis-decay-plot" class="w-full h-[500px]"></div>
                                 <div class="overflow-x-auto">
@@ -544,6 +575,7 @@
         let selectedCalibration = null;
         let selectedPeaks = []; // Unified selection location
         let selectedCalibrationPeak = null; // Track clicked peak in calibration workflow
+        let _calibPeakProcessing = false; // Prevent double-click during analyze_peak fetch
         let currentSliceIndex = 0;
         let omittedSlices = [];
 
@@ -680,14 +712,100 @@
             updatePhasePreview();
         }
 
+        function onApodizationSliderChange() {
+            const lb = parseFloat(document.getElementById('lb-slider').value);
+            document.getElementById('lb-value').textContent = lb.toFixed(1);
+            updatePhasePreview();
+            if (document.getElementById('proc-step-2') && !document.getElementById('proc-step-2').classList.contains('hidden')) {
+                updateBaselinePreview();
+            }
+        }
+
+        function onFFTPointsChange() {
+            const fftSelect = document.getElementById('fft-points-select');
+            const selected = fftSelect.value;
+            updatePhasePreview();
+            if (document.getElementById('proc-step-2') && !document.getElementById('proc-step-2').classList.contains('hidden')) {
+                updateBaselinePreview();
+            }
+        }
+
+        function formatFFTPointsLabel(points) {
+            if (!points) return '';
+            if (points >= 1024) {
+                const kPoints = points / 1024;
+                if (Number.isInteger(kPoints)) {
+                    return `${kPoints}K`;
+                }
+            }
+            return points.toLocaleString();
+        }
+
+        function initializeFFTPointsDropdown(nmrData) {
+            // Populate FFT dropdown with smart binary multiple options based on collected FID length
+            const fftSelect = document.getElementById('fft-points-select');
+            if (!fftSelect) return;
+
+            // Get the number of collected points from the data
+            let collectedPoints = null;
+            if (nmrData && nmrData.complex_re_0) {
+                collectedPoints = nmrData.complex_re_0.length;
+            } else if (nmrData && nmrData.raw_ppm) {
+                collectedPoints = nmrData.raw_ppm.length;
+            }
+
+            if (collectedPoints) {
+                document.getElementById('collected-points').textContent = collectedPoints.toLocaleString();
+            }
+
+            // Generate binary multiples: 2^N where N >= 9 (512 points minimum) up to 128K (131072)
+            const options = [];
+            options.push({ value: '', label: '-- Auto (4× collected) --' });
+
+            // Generate powers of 2: 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072
+            for (let n = 9; n <= 17; n++) {  // 2^9 = 512, 2^17 = 131072
+                const points = Math.pow(2, n);
+                // Only show if >= collected points and <= 131072
+                if (collectedPoints && points >= collectedPoints && points <= 131072) {
+                    const zerofill = (points / collectedPoints).toFixed(1);
+                    options.push({
+                        value: points.toString(),
+                        label: `${formatFFTPointsLabel(points)} points (${zerofill}x zero-fill)`
+                    });
+                }
+            }
+
+            // Clear existing options (except the first one)
+            while (fftSelect.options.length > 1) {
+                fftSelect.remove(1);
+            }
+
+            // Add the calculated options
+            for (const opt of options.slice(1)) {
+                const optEl = document.createElement('option');
+                optEl.value = opt.value;
+                optEl.textContent = opt.label;
+                fftSelect.appendChild(optEl);
+            }
+        }
+
         function updatePhasePreview() {
             const ph0 = parseFloat(document.getElementById('ph0-slider').value);
             const ph1 = parseFloat(document.getElementById('ph1-slider').value);
             const pivotVal = document.getElementById('pivot-ppm').value;
             const pivot = pivotVal ? parseFloat(pivotVal) : null;
+            const lb = parseFloat(document.getElementById('lb-slider').value);
+            const fftPointsVal = document.getElementById('fft-points-select').value;
+            const fftPoints = fftPointsVal ? parseInt(fftPointsVal) : null;
 
-            // Use fast client-side math if complex spectra are available (first slice, full resolution)
-            if (currentNmrData && (currentNmrData.complex_re_0 || currentNmrData.complex_re)) {
+            const baseLb = currentNmrData?.initial_processing_lb ?? currentNmrData?.processing_lb ?? 1.0;
+            const baseFft = currentNmrData?.initial_processing_fft_points ?? currentNmrData?.processing_fft_points ?? null;
+            const needsServerReprocess = !currentNmrData
+                || baseLb !== lb
+                || (baseFft || null) !== fftPoints;
+
+            // Use fast client-side math only when the preview matches the processed FID state.
+            if (!needsServerReprocess && currentNmrData && (currentNmrData.complex_re_0 || currentNmrData.complex_re)) {
                 const result = applyPhaseJS(ph0, ph1, pivot);
                 if (result) renderWizardPlot('plot-phase-preview', [result.spectrum], result.ppm);
                 return;
@@ -698,10 +816,17 @@
             fetch('/phase_spectrum', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ data_id: currentDataId, ph0, ph1, pivot_ppm: pivot })
+                body: JSON.stringify({ data_id: currentDataId, ph0, ph1, pivot_ppm: pivot, lb, fft_points: fftPoints })
             })
             .then(r => r.json())
-            .then(d => { if (d.phased_spectra) renderWizardPlot('plot-phase-preview', [d.phased_spectra[0]], d.ppm); })
+            .then(d => {
+                if (d.phased_spectra) {
+                    renderWizardPlot('plot-phase-preview', [d.phased_spectra[0]], d.ppm);
+                    currentNmrData.processing_lb = lb;
+                    currentNmrData.processing_fft_points = fftPoints;
+                    currentNmrData.raw_ppm = d.ppm;
+                }
+            })
             .catch(e => console.error('Phase preview error:', e));
         }
 
@@ -787,25 +912,50 @@
             const pivot = pivotVal ? parseFloat(pivotVal) : null;
             const baselineOrder = parseInt(
                 document.querySelector('input[name="baseline-method"]:checked')?.value ?? '-1');
+            const lb = parseFloat(document.getElementById('lb-slider').value);
+            const fftPointsVal = document.getElementById('fft-points-select').value;
+            const fftPoints = fftPointsVal ? parseInt(fftPointsVal) : null;
 
-            // Always show the phased spectrum immediately (client-side, no wait)
-            const instant = applyPhaseJS(ph0, ph1, pivot);
+            const baseLb = currentNmrData?.initial_processing_lb ?? currentNmrData?.processing_lb ?? 1.0;
+            const baseFft = currentNmrData?.initial_processing_fft_points ?? currentNmrData?.processing_fft_points ?? null;
+            const needsServerReprocess = !currentNmrData
+                || baseLb !== lb
+                || (baseFft || null) !== fftPoints;
 
             if (baselineOrder === -1 || !currentDataId) {
+                const instant = applyPhaseJS(ph0, ph1, pivot);
                 // "None" — just show the phased spectrum, no baseline overlay
                 if (instant) renderBaselinePlot('plot-baseline-preview', instant.spectrum, null,
                                                instant.ppm);
                 return;
             }
 
+            if (needsServerReprocess) {
+                fetch('/apply_processing', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ data_id: currentDataId, ph0, ph1,
+                        pivot_ppm: pivot, baseline_order: baselineOrder, preview: true, lb, fft_points: fftPoints })
+                })
+                .then(r => r.json())
+                .then(d => {
+                    if (d.raw_spectra && d.raw_spectra.length > 0) {
+                        renderBaselinePlot('plot-baseline-preview', d.raw_spectra[0], null, d.ppm);
+                    }
+                })
+                .catch(e => console.error('Baseline preview error:', e));
+                return;
+            }
+
             // Render spectrum immediately, then overlay baseline when server responds
+            const instant = applyPhaseJS(ph0, ph1, pivot);
             if (instant) renderBaselinePlot('plot-baseline-preview', instant.spectrum, null, instant.ppm);
 
             fetch('/apply_processing', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ data_id: currentDataId, ph0, ph1,
-                    pivot_ppm: pivot, baseline_order: baselineOrder, preview: true })
+                    pivot_ppm: pivot, baseline_order: baselineOrder, preview: true, lb, fft_points: fftPoints })
             })
             .then(r => r.json())
             .then(d => {
@@ -824,6 +974,9 @@
             const pivotVal = document.getElementById('pivot-ppm').value;
             const baselineOrder = parseInt(
                 document.querySelector('input[name="baseline-method"]:checked')?.value ?? '-1');
+            const lb = parseFloat(document.getElementById('lb-slider').value);
+            const fftPointsVal = document.getElementById('fft-points-select').value;
+            const fftPoints = fftPointsVal ? parseInt(fftPointsVal) : null;
             const btn = document.getElementById('btn-apply-processing');
             const origHtml = btn.innerHTML;
             btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i> Applying...';
@@ -834,7 +987,7 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ data_id: currentDataId, ph0, ph1,
                         pivot_ppm: pivotVal ? parseFloat(pivotVal) : null,
-                        baseline_order: baselineOrder })
+                        baseline_order: baselineOrder, lb, fft_points: fftPoints })
                 });
                 const d = await r.json();
                 if (d.error) { alert(d.error); return; }
@@ -846,6 +999,12 @@
                     type: 'scatter', mode: 'lines', name: 'Slice 1 (Processed)',
                     line: { color: '#2563eb', width: 1.5 }
                 }];
+                // Store processing parameters for later use
+                currentNmrData.ph0 = ph0;
+                currentNmrData.ph1 = ph1;
+                currentNmrData.processing_lb = lb;
+                currentNmrData.processing_fft_points = fftPoints;
+                currentNmrData.baseline_order = baselineOrder;
                 proceedAfterProcessing();
             } catch (e) {
                 console.error('Apply processing error:', e);
@@ -1046,6 +1205,9 @@
                         renderStackedPlot('plot-stacked-sample', data.plot_data.stacked_data);
                         showProcessingWizard('analysis');
                     }
+                    
+                    // Initialize FFT points dropdown based on collected data
+                    initializeFFTPointsDropdown(currentNmrData);
                 }
             });
         }
@@ -1361,8 +1523,31 @@
         }
 
         function handleCalibrationPeakClick(clickData) {
+            if (_calibPeakProcessing) return;
+            _calibPeakProcessing = true;
+
             const ppm = clickData.points[0].x;
-            selectedCalibrationPeak = ppm;  // Store the clicked peak
+            selectedCalibrationPeak = ppm;
+
+            // INSTANT: mark the peak on the spectrum immediately (relayout is fast, no data redraw)
+            Plotly.relayout('plot-selection', {
+                shapes: [{
+                    type: 'line',
+                    x0: ppm, x1: ppm, y0: 0, y1: 1,
+                    xref: 'x', yref: 'paper',
+                    line: { color: 'red', width: 2, dash: 'dot' }
+                }]
+            });
+
+            // INSTANT: show results panel with a loading spinner
+            const resultsDiv = document.getElementById('calib-results');
+            resultsDiv.classList.remove('hidden');
+            document.getElementById('params-info').innerHTML = `
+                <div class="flex items-center justify-center gap-3 py-4 text-blue-600">
+                    <i class="fas fa-spinner fa-spin text-lg"></i>
+                    <span class="text-sm font-medium">Analyzing ${ppm.toFixed(3)} ppm…</span>
+                </div>`;
+
             const standardType = document.getElementById('standard-select').value;
             fetch('/analyze_peak', {
                 method: 'POST',
@@ -1379,8 +1564,18 @@
             })
             .then(res => res.json())
             .then(data => {
-                if (data.error) alert(data.error);
-                else displayCalibrationResults(data);
+                _calibPeakProcessing = false;
+                if (data.error) {
+                    document.getElementById('params-info').innerHTML =
+                        `<div class="text-red-600 text-xs p-2"><i class="fas fa-exclamation-triangle mr-1"></i>${data.error}</div>`;
+                } else {
+                    displayCalibrationResults(data);
+                }
+            })
+            .catch(err => {
+                _calibPeakProcessing = false;
+                document.getElementById('params-info').innerHTML =
+                    `<div class="text-red-600 text-xs p-2"><i class="fas fa-exclamation-triangle mr-1"></i>Request failed: ${err.message}</div>`;
             });
         }
 
@@ -1403,12 +1598,29 @@
             const interceptAbsStr = formatCoeff(Math.abs(data.fit_intercept), isVarian);
 
             document.getElementById('calib-results').classList.remove('hidden');
+
+            // Build b-factor equation string from returned data
+            const tau_b = data.tau_bipolar || 0;
+            const gshape = data.gradient_shape || 'square';
+            const gfactor = data.gradient_shape_factor || 1.0;
+            const bEqStr = tau_b > 0
+                ? `b = (γ·g·δ)² · (Δ − δ/3 − τ/2) <span class="text-orange-600 font-bold">bipolar τ=${(tau_b*1e3).toFixed(3)} ms</span>`
+                : `b = (γ·g·δ)² · (Δ − δ/3)`;
+            const gshapeStr = (gshape !== 'square')
+                ? `<div class="flex justify-between text-amber-700"><span>Grad. shape factor:</span><span class="font-bold">${gfactor.toFixed(4)} (${gshape})</span></div>`
+                : '';
+
             document.getElementById('params-info').innerHTML = `
                 <div class="flex justify-between"><span>Δ Diffusion Time:</span> <span class="font-bold">${(data.big_delta * 1000).toFixed(1)} ms</span></div>
                 <div class="flex justify-between"><span>δ Pulse Width:</span> <span class="font-bold">${(data.delta * 1000).toFixed(1)} ms</span></div>
+                ${gshapeStr}
                 <div class="flex justify-between border-t pt-2 text-blue-800"><span>Calibrated Max G:</span> <span class="font-bold">${data.calibrated_max_g.toFixed(2)} G/cm</span></div>
                 <div class="text-[10px] font-mono mt-2 text-center bg-white p-1 rounded border border-blue-100">
                     G(${xSymbol}) = ${slopeStr}·${xSymbol} ${data.fit_intercept >= 0 ? '+ ' + interceptAbsStr : '- ' + interceptAbsStr}
+                </div>
+                <div class="mt-3 p-2 rounded-lg border text-[10px] font-mono leading-relaxed ${tau_b > 0 ? 'bg-orange-50 border-orange-200 text-orange-800' : 'bg-green-50 border-green-200 text-green-800'}">
+                    <div class="font-black uppercase tracking-wider mb-1 text-[9px]">Equation used for this calibration</div>
+                    ${bEqStr}
                 </div>
             `;
             Plotly.newPlot('decay-plot', [
@@ -1441,41 +1653,16 @@
                     margin: {t:40}, showlegend: true, legend: {x:0, y:1}
                 }, { responsive: true, displayModeBar: false });
             }
-            // Re-render the calibration plot with the selected peak marker
-            if (currentNmrData && selectedCalibrationPeak !== null) {
-                const plotData = currentNmrData.selection_data || [{x: currentNmrData.raw_ppm, y: currentNmrData.raw_spectra[0]}];
-                const layout = {
-                    title: 'Chemical Shift Spectrum (Slice 1)',
-                    xaxis: { title: 'Chemical Shift (ppm)', autorange: 'reversed', zeroline: false },
-                    yaxis: { title: 'Intensity', showticklabels: true, exponentformat: 'e', showexponent: 'all', zeroline: false },
-                    margin: { l: 60, r: 40, t: 40, b:40 }
-                };
-                const specData = plotData[0];
-                if (specData && specData.x && specData.y) {
-                    // Find closest index to selected peak
-                    let idx = 0;
-                    let minDiff = 999;
-                    for(let i=0; i<specData.x.length; i++){
-                        let diff = Math.abs(specData.x[i] - selectedCalibrationPeak);
-                        if(diff < minDiff){
-                            minDiff = diff;
-                            idx = i;
-                        }
-                    }
-                    const yVal = specData.y[idx];
-                    layout.shapes = [
-                        {
-                            type: 'circle',
-                            xref: 'x', yref: 'y',
-                            x0: selectedCalibrationPeak - 0.05, x1: selectedCalibrationPeak + 0.05,
-                            y0: yVal - 0.01, y1: yVal + 0.01,
-                            line: { color: 'red', width: 2 },
-                            fillcolor: 'red'
-                        }
-                    ];
-                }
-                Plotly.react('plot-selection', plotData, layout, { responsive: true, displayModeBar: false });
-                document.getElementById('plot-selection').on('plotly_click', handleCalibrationPeakClick);
+            // Update the peak marker (fast relayout — no full data redraw)
+            if (selectedCalibrationPeak !== null) {
+                Plotly.relayout('plot-selection', {
+                    shapes: [{
+                        type: 'line',
+                        x0: selectedCalibrationPeak, x1: selectedCalibrationPeak,
+                        y0: 0, y1: 1, xref: 'x', yref: 'paper',
+                        line: { color: 'red', width: 2 }
+                    }]
+                });
             }
 
             const tbody = document.getElementById('gradient-table-body');
@@ -1603,6 +1790,19 @@
             document.getElementById('info-bigdelta').textContent = (data.params.big_delta * 1000).toFixed(1) + ' ms';
             document.getElementById('info-calname').textContent = data.params.calibration_name;
 
+            // Show b-factor equation used
+            const aTau = data.params.tau_bipolar || 0;
+            const eqBanner = document.getElementById('info-equation-banner');
+            const eqText   = document.getElementById('info-equation-text');
+            if (aTau > 0) {
+                eqText.innerHTML = `(γ·g·δ)² · (Δ − δ/3 − τ/2) &nbsp;<strong style="color:#c2410c">bipolar τ = ${(aTau*1e3).toFixed(3)} ms</strong>`;
+                eqBanner.className = 'mt-2 px-4 py-2 rounded-lg text-[10px] font-mono border bg-orange-50 border-orange-200 text-orange-800';
+            } else {
+                eqText.textContent = '(γ·g·δ)² · (Δ − δ/3)';
+                eqBanner.className = 'mt-2 px-4 py-2 rounded-lg text-[10px] font-mono border bg-green-50 border-green-200 text-green-800';
+            }
+            eqBanner.classList.remove('hidden');
+
             // Render Decay Plot (Multiple series if multiple peaks)
             const plotData = [];
             data.results.forEach(res => {
@@ -1714,11 +1914,17 @@
                 ph0: parseFloat(document.getElementById('ph0-slider')?.value || 0),
                 ph1: parseFloat(document.getElementById('ph1-slider')?.value || 0),
                 baseline_order: parseInt(document.querySelector('input[name="baseline-method"]:checked')?.value || -1),
+                lb: parseFloat(document.getElementById('lb-slider')?.value || 1.0),
+                fft_points: document.getElementById('fft-points-select')?.value ? parseInt(document.getElementById('fft-points-select').value) : null,
                 vendor: currentNmrData?.vendor || 'unknown',
                 pulse_program: lastAnalysisResult.params?.pulse_program || 'unknown',
                 delta: lastAnalysisResult.params?.delta || 0,
                 big_delta: lastAnalysisResult.params?.big_delta || 0,
                 calibration_name: selectedCalibration?.name || 'N/A',
+                sequence_type: lastAnalysisResult.params?.sequence_type || 'PGSE',
+                gradient_shape: lastAnalysisResult.params?.gradient_shape || 'square',
+                gradient_shape_factor: lastAnalysisResult.params?.gradient_shape_factor || 1.0,
+                tau_bipolar: lastAnalysisResult.params?.tau_bipolar || 0.0,
                 raw_ppm: currentNmrData?.raw_ppm || [],
                 raw_spectra: currentNmrData?.raw_spectra || []
             };
@@ -1750,6 +1956,72 @@
                 btn.disabled = false;
                 btn.innerHTML = originalHTML;
             });
+        }
+
+        function downloadCalibrationReport() {
+            if (!lastAnalysisResult || !lastAnalysisResult.fit_slope) {
+                alert('No calibration data available. Run a calibration first.');
+                return;
+            }
+            const r = lastAnalysisResult;
+            const vendor = r.vendor || 'bruker';
+            const xLabel = vendor === 'varian' ? 'DAC units' : '0–1 fraction';
+            const lines = [];
+            const hr = '='.repeat(78);
+            const hr2 = '-'.repeat(78);
+            lines.push(hr);
+            lines.push('  NMR GRADIENT CALIBRATION REPORT');
+            lines.push(hr);
+            lines.push('');
+            lines.push('1. EXPERIMENT PARAMETERS');
+            lines.push(hr2);
+            lines.push('  Vendor:                 ' + vendor.charAt(0).toUpperCase() + vendor.slice(1));
+            lines.push('  Peak analysed (ppm):    ' + (r.ppm !== undefined ? r.ppm.toFixed(3) : 'N/A'));
+            lines.push('  δ (gradient pulse):    ' + (r.delta !== undefined ? (r.delta*1e6).toFixed(2)+' μs  ('+r.delta.toFixed(6)+' s)' : 'N/A'));
+            lines.push('  Δ (diffusion time):    ' + (r.big_delta !== undefined ? (r.big_delta*1e3).toFixed(3)+' ms  ('+r.big_delta.toFixed(6)+' s)' : 'N/A'));
+            lines.push('');
+            lines.push('2. CALIBRATION EQUATION');
+            lines.push(hr2);
+            lines.push('  Fitting model:          Stejskal–Tanner  I = I₀·exp(−D·b)');
+            if (r.tau_bipolar && r.tau_bipolar > 0) {
+                lines.push('  b-factor:               b = (γ·g·δ)² · (Δ − δ/3 − τ/2)   [bipolar, τ = ' + (r.tau_bipolar*1e3).toFixed(3) + ' ms]');
+                lines.push('                          γ(¹H) = 2.67522×10⁸ rad/(s·T)');
+            } else {
+                lines.push('  b-factor:               b = (γ·g·δ)² · (Δ − δ/3)   [¹H, γ = 2.67522×10⁸ rad/(s·T)]');
+            }
+            if (r.gradient_shape && r.gradient_shape !== 'square') {
+                lines.push('  Gradient shape factor:  ' + (r.gradient_shape_factor || 1.0).toFixed(4) + '  (' + (r.gradient_shape || 'shaped') + ')');
+            }
+            lines.push('  Gradient calibration:   G (G/cm) = slope · x + intercept');
+            lines.push('  where x =               ' + xLabel);
+            lines.push('  slope:                  ' + r.fit_slope.toExponential(5) + ' G/cm / (' + xLabel + ')');
+            lines.push('  intercept:              ' + r.fit_intercept.toExponential(5) + ' G/cm');
+            lines.push('  Max gradient (fitted):  ' + r.calibrated_max_g.toFixed(4) + ' G/cm');
+            lines.push('');
+            lines.push('3. GRADIENT TABLE');
+            lines.push(hr2);
+            const colX = vendor === 'varian' ? 'DAC unit' : 'Ramp (0-1)';
+            lines.push('  Step    ' + colX.padEnd(14) + '   G/cm');
+            lines.push('  ------  ' + '-'.repeat(14) + '   --------');
+            (r.gradients || []).forEach((g, i) => {
+                const step = r.gradient_steps ? r.gradient_steps[i] : i;
+                const stepStr = vendor === 'varian' ? Math.round(step).toString() : step.toFixed(4);
+                lines.push('  ' + String(i+1).padEnd(6) + '  ' + stepStr.padEnd(14) + '   ' + g.toFixed(4));
+            });
+            lines.push('');
+            lines.push(hr);
+            lines.push('  Generated: ' + new Date().toISOString().replace('T',' ').slice(0,19));
+            lines.push(hr);
+
+            const blob = new Blob([lines.join('\n')], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'calibration_report_' + new Date().toISOString().slice(0,10) + '.txt';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
         }
 
         document.getElementById('btn-save-calib').addEventListener('click', () => document.getElementById('modal-save').classList.remove('hidden'));
