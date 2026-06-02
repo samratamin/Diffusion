@@ -368,6 +368,11 @@ def analyze_diffusion():
         if len(raw_spectra) == 0:
             return jsonify({'error': 'Raw spectral data missing for analysis.'}), 400
 
+        # Realign ppm to match actual spectrum length in case n_fft != n_collected
+        # (same fix as in phase_spectrum / apply_processing)
+        if raw_spectra.shape[1] != len(full_ppm):
+            full_ppm = np.linspace(full_ppm[0], full_ppm[-1], raw_spectra.shape[1])
+
         # Calculate X values for fitting (GRADIENTS)
         # Gradient DAC settings come from 'difframp' as fractions (0.0 to 1.0)
         x_points = np.array(plot_data.get('difframp', []))
@@ -1577,12 +1582,18 @@ def apply_processing():
         else:
             corrected = phased
 
-        # Normalize to positive max of first slice
+        # Normalize to positive max of first slice.
+        # If the dominant (largest-magnitude) feature in slice 0 is negative
+        # (e.g. Varian data with default ph0=0), flip all slices so peaks are positive.
+        abs_max_val = float(np.max(np.abs(corrected[0])))
+        if abs_max_val == 0:
+            abs_max_val = 1.0
+        peak_idx_c = int(np.argmax(np.abs(corrected[0])))
+        if float(corrected[0, peak_idx_c]) < 0:
+            corrected = -corrected
         max_v = float(np.max(corrected[0]))
         if max_v <= 0:
-            max_v = float(np.max(np.abs(corrected[0])))
-        if max_v == 0:
-            max_v = 1.0
+            max_v = abs_max_val
         corrected_norm = corrected / max_v
 
         processed_list = [safe_list(sp) for sp in corrected_norm]
@@ -1590,6 +1601,8 @@ def apply_processing():
         if not preview:
             # Permanently update stored spectra for subsequent analysis (float32 numpy)
             plot_data['raw_spectra'] = corrected_norm.astype(np.float32)
+            # Keep ppm in sync with actual spectrum length (e.g. after non-1x FFT zero-fill)
+            plot_data['raw_ppm'] = ppm.tolist()
 
         response = {'raw_spectra': processed_list, 'ppm': ppm.tolist()}
         if preview and baseline_0 is not None:
