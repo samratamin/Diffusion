@@ -126,6 +126,26 @@
         }
         .btn-delete:hover { background: #e53e3e; color: white; }
         .td-action { width: 90px; }
+        .settings-card { margin-bottom: 1.5rem; }
+        .settings-form { padding: 1.25rem 1.5rem; }
+        .settings-grid { display: flex; flex-direction: column; gap: 0.75rem; }
+        .settings-row { display: flex; align-items: center; gap: 0.75rem; }
+        .settings-row input[type="checkbox"] { width: 1rem; height: 1rem; accent-color: #4f46e5; flex-shrink: 0; }
+        .settings-row label { font-size: 0.875rem; color: #444; cursor: pointer; }
+        .settings-row .label-sub { font-size: 0.75rem; color: #999; margin-left: 0.25rem; }
+        .btn-save {
+            margin-top: 1.1rem;
+            background: #4f46e5;
+            color: white;
+            border: none;
+            padding: 0.45rem 1.1rem;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.8rem;
+            font-weight: 600;
+            transition: background 0.15s;
+        }
+        .btn-save:hover { background: #4338ca; }
     </style>
 </head>
 <body>
@@ -146,6 +166,46 @@
             <div class="flash {{ category }}">{{ message }}</div>
           {% endfor %}
         {% endwith %}
+
+        <div class="card settings-card">
+            <div class="card-header">
+                <h2>Analysis UI Settings</h2>
+            </div>
+            <form class="settings-form" method="POST" action="/admin/ui_settings">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <p style="font-size:0.8rem;color:#888;margin-bottom:1rem;">
+                    Control which measurement method options are shown in the analysis panel.
+                    Uncheck options that are not yet ready for use.
+                </p>
+                <div class="settings-grid">
+                    <div class="settings-row">
+                        <input type="checkbox" id="ui_show_method_area" name="ui_show_method_area"
+                               {% if ui_settings.show_method_area != '0' %}checked{% endif %}>
+                        <label for="ui_show_method_area">
+                            Show <strong>Integral (Peak Area)</strong> measurement method
+                            <span class="label-sub">— area integration under the peak</span>
+                        </label>
+                    </div>
+                    <div class="settings-row">
+                        <input type="checkbox" id="ui_show_method_intensity_exact" name="ui_show_method_intensity_exact"
+                               {% if ui_settings.show_method_intensity_exact != '0' %}checked{% endif %}>
+                        <label for="ui_show_method_intensity_exact">
+                            Show <strong>Exact PPM</strong> intensity sub-method
+                            <span class="label-sub">— signal value at the clicked ppm position</span>
+                        </label>
+                    </div>
+                    <div class="settings-row">
+                        <input type="checkbox" id="ui_show_method_intensity_fit" name="ui_show_method_intensity_fit"
+                               {% if ui_settings.show_method_intensity_fit != '0' %}checked{% endif %}>
+                        <label for="ui_show_method_intensity_fit">
+                            Show <strong>Fitted Peak</strong> intensity sub-method
+                            <span class="label-sub">— Lorentzian fit around the peak</span>
+                        </label>
+                    </div>
+                </div>
+                <button type="submit" class="btn-save">Save Settings</button>
+            </form>
+        </div>
 
         <div class="card">
             <div class="card-header">

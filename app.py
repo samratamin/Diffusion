@@ -190,9 +190,15 @@ def admin_panel():
     conn.close()
     if 'csrf_token' not in session:
         session['csrf_token'] = secrets.token_hex(24)
+    ui_settings = {
+        'show_method_area':              _get_admin_setting('ui_show_method_area') or '1',
+        'show_method_intensity_exact':   _get_admin_setting('ui_show_method_intensity_exact') or '1',
+        'show_method_intensity_fit':     _get_admin_setting('ui_show_method_intensity_fit') or '1',
+    }
     return render_template('admin.html',
                            calibrations=cals,
-                           csrf_token=session['csrf_token'])
+                           csrf_token=session['csrf_token'],
+                           ui_settings=ui_settings)
 
 
 @app.route('/admin/calibration/<int:cal_id>/delete', methods=['POST'])
@@ -211,6 +217,28 @@ def admin_delete_calibration(cal_id):
         flash('Calibration not found.', 'error')
     conn.close()
     return redirect('/admin')
+
+
+@app.route('/admin/ui_settings', methods=['POST'])
+@_admin_required
+def admin_ui_settings():
+    if request.form.get('csrf_token') != session.get('csrf_token'):
+        flash('Invalid request token.', 'error')
+        return redirect('/admin')
+    for key in ['ui_show_method_area', 'ui_show_method_intensity_exact', 'ui_show_method_intensity_fit']:
+        _set_admin_setting(key, '1' if request.form.get(key) else '0')
+    flash('UI settings saved.', 'success')
+    return redirect('/admin')
+
+
+@app.route('/api/ui_settings')
+def api_ui_settings():
+    """Public endpoint — returns which measurement method options are visible."""
+    return jsonify({
+        'show_method_area':            _get_admin_setting('ui_show_method_area') != '0',
+        'show_method_intensity_exact': _get_admin_setting('ui_show_method_intensity_exact') != '0',
+        'show_method_intensity_fit':   _get_admin_setting('ui_show_method_intensity_fit') != '0',
+    })
 
 
 @app.route('/')

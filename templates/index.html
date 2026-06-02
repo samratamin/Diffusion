@@ -393,7 +393,7 @@
                                                     <span class="block text-[9px] text-gray-400 group-hover:text-blue-400">Peak Height</span>
                                                 </div>
                                             </label>
-                                            <label class="flex items-center px-4 py-2 rounded-xl border border-gray-100 hover:bg-blue-50 cursor-pointer transition-all bg-gray-50 group">
+                                            <label id="method-area-option" class="flex items-center px-4 py-2 rounded-xl border border-gray-100 hover:bg-blue-50 cursor-pointer transition-all bg-gray-50 group">
                                                 <input type="radio" name="method-category" value="area" onchange="onMethodCategoryChange()" class="w-4 h-4 text-blue-600">
                                                 <div class="ml-3">
                                                     <span class="block text-xs font-bold text-gray-700">Integral</span>
@@ -407,11 +407,11 @@
                                                 <input type="radio" name="intensity-submethod" value="intensity_max" checked class="w-3 h-3 text-blue-600">
                                                 <span class="font-bold text-gray-600 group-hover:text-blue-600">Peak Max</span>
                                             </label>
-                                            <label class="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-gray-100 hover:bg-blue-50 cursor-pointer transition-all bg-white group text-[10px]">
+                                            <label id="method-intensity-exact-option" class="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-gray-100 hover:bg-blue-50 cursor-pointer transition-all bg-white group text-[10px]">
                                                 <input type="radio" name="intensity-submethod" value="intensity_exact" class="w-3 h-3 text-blue-600">
                                                 <span class="font-bold text-gray-600 group-hover:text-blue-600">Exact PPM</span>
                                             </label>
-                                            <label class="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-gray-100 hover:bg-purple-50 cursor-pointer transition-all bg-white group text-[10px]">
+                                            <label id="method-intensity-fit-option" class="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-gray-100 hover:bg-purple-50 cursor-pointer transition-all bg-white group text-[10px]">
                                                 <input type="radio" name="intensity-submethod" value="intensity_fit" class="w-3 h-3 text-purple-600">
                                                 <span class="font-bold text-gray-600 group-hover:text-purple-600">Fitted Peak</span>
                                             </label>
@@ -2049,6 +2049,31 @@
         
         // Initial load
         loadCalibrations();
+
+        // Apply admin-configured visibility settings for measurement methods
+        (async function applyUiSettings() {
+            try {
+                const res = await fetch('/api/ui_settings');
+                if (!res.ok) return;
+                const s = await res.json();
+
+                function hideOption(id, fallbackValue) {
+                    const el = document.getElementById(id);
+                    if (!el) return;
+                    el.style.display = 'none';
+                    // If this option's radio is currently selected, fall back to Peak Max
+                    const radio = el.querySelector('input[type="radio"]');
+                    if (radio && radio.checked) {
+                        const fallback = document.querySelector(`input[name="${radio.name}"][value="${fallbackValue}"]`);
+                        if (fallback) { fallback.checked = true; onMethodCategoryChange(); }
+                    }
+                }
+
+                if (!s.show_method_area)            hideOption('method-area-option', 'intensity');
+                if (!s.show_method_intensity_exact) hideOption('method-intensity-exact-option', 'intensity_max');
+                if (!s.show_method_intensity_fit)   hideOption('method-intensity-fit-option', 'intensity_max');
+            } catch (_) { /* settings unavailable — show everything */ }
+        })();
     </script>
 </body>
 </html>
