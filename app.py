@@ -2028,6 +2028,7 @@ def process_nmr_data(extract_dir, lb=1.0, fft_points=None):
     
     # Determine FFT size: use provided fft_points or default to 4x zero-filling
     n_collected = len(slices[0]) if slices else 0
+    params['n_collected'] = n_collected  # expose to browser for FFT picker
     n_fft_default = n_collected * 4
     n_fft = fft_points if fft_points else n_fft_default
     

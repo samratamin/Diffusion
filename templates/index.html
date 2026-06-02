@@ -726,6 +726,13 @@
             }
         }
 
+        function getFFTPoints() {
+            const val = document.getElementById('fft-points-select')?.value;
+            if (!val || val.startsWith('_')) return null;
+            const n = parseInt(val, 10);
+            return isNaN(n) ? null : n;
+        }
+
         function onFFTPointsChange() {
             const fftSelect = document.getElementById('fft-points-select');
             const selected = fftSelect.value;
@@ -747,50 +754,37 @@
         }
 
         function initializeFFTPointsDropdown(nmrData) {
-            // Populate FFT dropdown with smart binary multiple options based on collected FID length
             const fftSelect = document.getElementById('fft-points-select');
             if (!fftSelect) return;
 
-            // Get the number of collected points from the data
-            let collectedPoints = null;
-            if (nmrData && nmrData.complex_re_0) {
-                collectedPoints = nmrData.complex_re_0.length;
-            } else if (nmrData && nmrData.raw_ppm) {
-                collectedPoints = nmrData.raw_ppm.length;
-            }
+            // n_collected comes from exp_params (set by backend on upload)
+            const collectedPoints = nmrData?.exp_params?.n_collected || null;
+            document.getElementById('collected-points').textContent =
+                collectedPoints ? collectedPoints.toLocaleString() : '—';
 
+            // Build options: 1x, 2x, 4x, 8x relative to collected FID length
+            const multipliers = [
+                { mult: 1, label: '1× (no zero-fill)' },
+                { mult: 2, label: '2× zero-fill' },
+                { mult: 4, label: '4× zero-fill' },
+                { mult: 8, label: '8× zero-fill' },
+            ];
+
+            while (fftSelect.options.length > 1) fftSelect.remove(1);
+
+            multipliers.forEach(({ mult, label }) => {
+                const pts = collectedPoints ? collectedPoints * mult : null;
+                const opt = document.createElement('option');
+                opt.value = pts ? pts.toString() : `_mult_${mult}`;
+                opt.textContent = pts
+                    ? `${formatFFTPointsLabel(pts)} pts — ${label}`
+                    : label;
+                fftSelect.appendChild(opt);
+            });
+
+            // Default to 4x to match existing behaviour
             if (collectedPoints) {
-                document.getElementById('collected-points').textContent = collectedPoints.toLocaleString();
-            }
-
-            // Generate binary multiples: 2^N where N >= 9 (512 points minimum) up to 128K (131072)
-            const options = [];
-            options.push({ value: '', label: '-- Auto (4× collected) --' });
-
-            // Generate powers of 2: 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072
-            for (let n = 9; n <= 17; n++) {  // 2^9 = 512, 2^17 = 131072
-                const points = Math.pow(2, n);
-                // Only show if >= collected points and <= 131072
-                if (collectedPoints && points >= collectedPoints && points <= 131072) {
-                    const zerofill = (points / collectedPoints).toFixed(1);
-                    options.push({
-                        value: points.toString(),
-                        label: `${formatFFTPointsLabel(points)} points (${zerofill}x zero-fill)`
-                    });
-                }
-            }
-
-            // Clear existing options (except the first one)
-            while (fftSelect.options.length > 1) {
-                fftSelect.remove(1);
-            }
-
-            // Add the calculated options
-            for (const opt of options.slice(1)) {
-                const optEl = document.createElement('option');
-                optEl.value = opt.value;
-                optEl.textContent = opt.label;
-                fftSelect.appendChild(optEl);
+                fftSelect.value = (collectedPoints * 4).toString();
             }
         }
 
@@ -800,8 +794,7 @@
             const pivotVal = document.getElementById('pivot-ppm').value;
             const pivot = pivotVal ? parseFloat(pivotVal) : null;
             const lb = parseFloat(document.getElementById('lb-slider').value);
-            const fftPointsVal = document.getElementById('fft-points-select').value;
-            const fftPoints = fftPointsVal ? parseInt(fftPointsVal) : null;
+            const fftPoints = getFFTPoints();
 
             const baseLb = currentNmrData?.initial_processing_lb ?? currentNmrData?.processing_lb ?? 1.0;
             const baseFft = currentNmrData?.initial_processing_fft_points ?? currentNmrData?.processing_fft_points ?? null;
@@ -918,8 +911,7 @@
             const baselineOrder = parseInt(
                 document.querySelector('input[name="baseline-method"]:checked')?.value ?? '-1');
             const lb = parseFloat(document.getElementById('lb-slider').value);
-            const fftPointsVal = document.getElementById('fft-points-select').value;
-            const fftPoints = fftPointsVal ? parseInt(fftPointsVal) : null;
+            const fftPoints = getFFTPoints();
 
             const baseLb = currentNmrData?.initial_processing_lb ?? currentNmrData?.processing_lb ?? 1.0;
             const baseFft = currentNmrData?.initial_processing_fft_points ?? currentNmrData?.processing_fft_points ?? null;
@@ -980,8 +972,7 @@
             const baselineOrder = parseInt(
                 document.querySelector('input[name="baseline-method"]:checked')?.value ?? '-1');
             const lb = parseFloat(document.getElementById('lb-slider').value);
-            const fftPointsVal = document.getElementById('fft-points-select').value;
-            const fftPoints = fftPointsVal ? parseInt(fftPointsVal) : null;
+            const fftPoints = getFFTPoints();
             const btn = document.getElementById('btn-apply-processing');
             const origHtml = btn.innerHTML;
             btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i> Applying...';
@@ -1951,7 +1942,7 @@
                 ph1: parseFloat(document.getElementById('ph1-slider')?.value || 0),
                 baseline_order: parseInt(document.querySelector('input[name="baseline-method"]:checked')?.value || -1),
                 lb: parseFloat(document.getElementById('lb-slider')?.value || 1.0),
-                fft_points: document.getElementById('fft-points-select')?.value ? parseInt(document.getElementById('fft-points-select').value) : null,
+                fft_points: getFFTPoints(),
                 vendor: currentNmrData?.vendor || 'unknown',
                 pulse_program: lastAnalysisResult.params?.pulse_program || 'unknown',
                 delta: lastAnalysisResult.params?.delta || 0,
