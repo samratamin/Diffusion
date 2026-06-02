@@ -288,14 +288,15 @@
                             </label>
                             <input type="range" id="lb-slider" min="0" max="50" step="0.5" value="1"
                                 oninput="onApodizationSliderChange()" class="w-full accent-green-600 h-2 cursor-pointer">
-                            <p class="text-[9px] text-gray-400 mt-1">Default: 1 Hz (minimal peak broadening)</p>
+                            <p class="text-[9px] text-gray-400 mt-1" id="lb-help-text">Default: 1 Hz (minimal peak broadening)</p>
+                            <p class="hidden text-[9px] text-orange-500 font-semibold mt-1" id="lb-loading-text"><i class="fas fa-spinner fa-spin mr-1"></i>Recomputing spectrum...</p>
                         </div>
                         <div>
                             <label class="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">
                                 FFT Points (Zero-filling)
                             </label>
                             <select id="fft-points-select" onchange="onFFTPointsChange()" class="w-full border border-gray-300 rounded-lg p-2 bg-white text-xs font-medium focus:outline-none focus:border-green-400">
-                                <option value="">-- Auto (4× collected) --</option>
+                                <option value="">-- Auto (1× collected) --</option>
                             </select>
                             <p class="text-[9px] text-gray-400 mt-1" id="fft-info-text">Points collected: <span id="collected-points">loading...</span></p>
                         </div>
@@ -610,6 +611,10 @@
         // Debounce + abort state for server-side preview requests
         let _phaseTimer = null; let _phaseAbort = null;
         let _baselineTimer = null; let _baselineAbort = null;
+        function _setPhaseLoading(busy) {
+            document.getElementById('lb-help-text')?.classList.toggle('hidden', busy);
+            document.getElementById('lb-loading-text')?.classList.toggle('hidden', !busy);
+        }
 
         function showProcessingWizard(workflow = 'analysis') {
             currentWorkflow = workflow;
@@ -798,9 +803,9 @@
                 fftSelect.appendChild(opt);
             });
 
-            // Default to 4x to match existing behaviour
+            // Default to 1x (no zero-fill) for fast real-time sliders
             if (collectedPoints) {
-                fftSelect.value = (collectedPoints * 4).toString();
+                fftSelect.value = collectedPoints.toString();
             }
         }
 
@@ -814,9 +819,9 @@
 
             const baseLb = currentNmrData?.initial_processing_lb ?? currentNmrData?.processing_lb ?? 1.0;
             const baseFft = currentNmrData?.initial_processing_fft_points ?? currentNmrData?.processing_fft_points ?? null;
-            // If backend never stored fft_points (null), default was n_collected*4 — same as dropdown default.
+            // effectiveBaseFft matches server default (1x — no zero-fill)
             const nCollected = currentNmrData?.exp_params?.n_collected || 0;
-            const effectiveBaseFft = baseFft ?? (nCollected ? nCollected * 4 : null);
+            const effectiveBaseFft = baseFft ?? (nCollected || null);
             const needsServerReprocess = !currentNmrData
                 || baseLb !== lb
                 || (effectiveBaseFft || null) !== fftPoints;
@@ -833,6 +838,7 @@
             if (_phaseTimer) clearTimeout(_phaseTimer);
             if (_phaseAbort) { _phaseAbort.abort(); _phaseAbort = null; }
             _phaseTimer = setTimeout(() => {
+                _setPhaseLoading(true);
                 _phaseAbort = new AbortController();
                 fetch('/phase_spectrum', {
                     method: 'POST',
@@ -842,14 +848,23 @@
                 })
                 .then(r => { if (!r.ok) throw new Error(`Server ${r.status}`); return r.json(); })
                 .then(d => {
+                    _setPhaseLoading(false);
                     if (d.phased_spectra) {
                         renderWizardPlot('plot-phase-preview', [d.phased_spectra[0]], d.ppm);
                         currentNmrData.processing_lb = lb;
                         currentNmrData.processing_fft_points = fftPoints;
                         currentNmrData.raw_ppm = d.ppm;
+                        // Server returned new complex data: switch back to instant client-side phase
+                        if (d.complex_re_0) {
+                            currentNmrData.complex_re_0 = d.complex_re_0;
+                            currentNmrData.complex_im_0 = d.complex_im_0;
+                            currentNmrData.complex_ppm = d.ppm;
+                            currentNmrData.initial_processing_lb = lb;
+                            currentNmrData.initial_processing_fft_points = fftPoints;
+                        }
                     }
                 })
-                .catch(e => { if (e.name !== 'AbortError') console.error('Phase preview error:', e); });
+                .catch(e => { _setPhaseLoading(false); if (e.name !== 'AbortError') console.error('Phase preview error:', e); });
             }, 150);
         }
 
@@ -969,9 +984,9 @@
 
             const baseLb = currentNmrData?.initial_processing_lb ?? currentNmrData?.processing_lb ?? 1.0;
             const baseFft = currentNmrData?.initial_processing_fft_points ?? currentNmrData?.processing_fft_points ?? null;
-            // If backend never stored fft_points (null), default was n_collected*4 — same as dropdown default.
+            // effectiveBaseFft matches server default (1x — no zero-fill)
             const nCollected = currentNmrData?.exp_params?.n_collected || 0;
-            const effectiveBaseFft = baseFft ?? (nCollected ? nCollected * 4 : null);
+            const effectiveBaseFft = baseFft ?? (nCollected || null);
             const needsServerReprocess = !currentNmrData
                 || baseLb !== lb
                 || (effectiveBaseFft || null) !== fftPoints;

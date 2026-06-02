@@ -1383,10 +1383,11 @@ def phase_spectrum():
             return jsonify({'error': 'Data not found or no complex spectra stored'}), 404
 
         # Re-compute complex spectra if apodization or FFT points have changed
-        if (lb != 1.0 or fft_points) and '_raw_fid_slices' in plot_data:
+        recomputed_from_fid = (lb != 1.0 or fft_points) and '_raw_fid_slices' in plot_data
+        if recomputed_from_fid:
             raw_fid_slices = plot_data['_raw_fid_slices']
             n_collected = plot_data.get('_n_collected', len(raw_fid_slices[0]) if raw_fid_slices else 0)
-            n_fft_default = n_collected * 4
+            n_fft_default = n_collected  # 1x default
             n_fft = fft_points if fft_points else n_fft_default
             
             # Re-process FID slices with new parameters
@@ -1409,10 +1410,15 @@ def phase_spectrum():
         norm = float(np.max(np.abs(phased[0]))) or 1.0
         phased_norm = phased / norm
 
-        return jsonify({
+        resp = {
             'phased_spectra': [safe_list(sp) for sp in phased_norm],
             'ppm': ppm.tolist()
-        })
+        }
+        # Return raw complex so the client can switch back to instant client-side phase
+        if recomputed_from_fid:
+            resp['complex_re_0'] = [float(v) for v in np.real(complex_arr[0])]
+            resp['complex_im_0'] = [float(v) for v in np.imag(complex_arr[0])]
+        return jsonify(resp)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -1504,7 +1510,7 @@ def apply_processing():
         if (lb != 1.0 or fft_points) and '_raw_fid_slices' in plot_data:
             raw_fid_slices = plot_data['_raw_fid_slices']
             n_collected = plot_data.get('_n_collected', len(raw_fid_slices[0]) if raw_fid_slices else 0)
-            n_fft_default = n_collected * 4
+            n_fft_default = n_collected  # 1x default
             n_fft = fft_points if fft_points else n_fft_default
             
             # Re-process FID slices with new parameters
@@ -2062,10 +2068,10 @@ def process_nmr_data(extract_dir, lb=1.0, fft_points=None):
     processed_spectra = []  # magnitude for stacked display
     complex_spectra = []    # complex for server-side phase correction
     
-    # Determine FFT size: use provided fft_points or default to 4x zero-filling
+    # Determine FFT size: use provided fft_points or default to 1x (no zero-fill)
     n_collected = len(slices[0]) if slices else 0
     params['n_collected'] = n_collected  # expose to browser for FFT picker
-    n_fft_default = n_collected * 4
+    n_fft_default = n_collected  # 1x by default — fast, real-time sliders
     n_fft = fft_points if fft_points else n_fft_default
     
     for i, trace in enumerate(slices):
