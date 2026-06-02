@@ -218,6 +218,7 @@
                 <thead>
                     <tr>
                         <th>Name</th>
+                        <th>Vendor</th>
                         <th>Created</th>
                         <th>Max G (G/cm)</th>
                         <th>δ (ms)</th>
@@ -231,6 +232,7 @@
                     {% for cal in calibrations %}
                     <tr>
                         <td><span class="cal-name">{{ cal['name'] }}</span></td>
+                        <td><span class="mono" style="font-size:0.78rem;text-transform:capitalize">{{ cal['vendor'] or 'bruker' }}</span></td>
                         <td><span class="cal-date">{{ cal['timestamp'] }}</span></td>
                         <td class="mono">{{ "%.3f" | format(cal['max_g_gauss']) }}</td>
                         <td class="mono">{{ "%.3f" | format(cal['delta'] * 1000) if cal['delta'] else "—" }}</td>

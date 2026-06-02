@@ -198,6 +198,11 @@
                                     <option value="">-- Load Saved Profile --</option>
                                 </select>
                             </div>
+                            <div id="calib-vendor-filter-note" class="hidden mt-2 text-[10px] text-blue-600 font-semibold flex items-center gap-1">
+                                <i class="fas fa-filter"></i>
+                                <span id="calib-vendor-filter-text"></span>
+                                <button onclick="filterCalibrationsByVendor(null)" class="ml-auto text-gray-400 hover:text-gray-600 transition-colors" title="Show all calibrations">✕ Show all</button>
+                            </div>
                             <div id="selected-calib-summary" class="mt-3 text-[10px] text-green-700 font-medium hidden bg-green-50/30 p-3 rounded-xl border border-green-100 italic"></div>
                         </div>
                     </div>
@@ -1075,26 +1080,50 @@
             updatePeakChips();
         }
 
-        function loadCalibrations() {
+        function loadCalibrations(vendorFilter) {
             fetch('/get_calibrations')
             .then(res => res.json())
             .then(data => {
                 calibrations = data;
-                const picker = document.getElementById('calib-picker');
-                picker.innerHTML = '<option value="">-- Load Saved Profile --</option>';
-                data.forEach(c => {
-                    const opt = document.createElement('option');
-                    opt.value = c.id;
-                    opt.textContent = `${c.name} (${new Date(c.timestamp).toLocaleDateString()})`;
-                    picker.appendChild(opt);
-                });
-
-                // Auto-select latest calibration if available
-                if (data.length > 0) {
-                    picker.value = data[0].id;
-                    picker.dispatchEvent(new Event('change'));
-                }
+                _populateCalibPicker(data, vendorFilter || null);
             });
+        }
+
+        function filterCalibrationsByVendor(vendor) {
+            _populateCalibPicker(calibrations, vendor);
+        }
+
+        function _populateCalibPicker(data, vendor) {
+            const filtered = vendor ? data.filter(c => (c.vendor || 'bruker') === vendor) : data;
+            const picker = document.getElementById('calib-picker');
+            picker.innerHTML = '<option value="">-- Load Saved Profile --</option>';
+            filtered.forEach(c => {
+                const opt = document.createElement('option');
+                opt.value = c.id;
+                const vendorLabel = (c.vendor && c.vendor !== 'bruker') ? ` [${c.vendor}]` : '';
+                opt.textContent = `${c.name}${vendorLabel} (${new Date(c.timestamp).toLocaleDateString()})`;
+                picker.appendChild(opt);
+            });
+
+            // Update filter indicator
+            const note = document.getElementById('calib-vendor-filter-note');
+            const noteText = document.getElementById('calib-vendor-filter-text');
+            if (vendor) {
+                const vcap = vendor.charAt(0).toUpperCase() + vendor.slice(1);
+                noteText.textContent = `Showing ${vcap} calibrations only (${filtered.length} of ${data.length})`;
+                note.classList.remove('hidden');
+            } else {
+                note.classList.add('hidden');
+            }
+
+            // Auto-select first match if available
+            if (filtered.length > 0) {
+                picker.value = filtered[0].id;
+                picker.dispatchEvent(new Event('change'));
+            } else {
+                selectedCalibration = null;
+                document.getElementById('selected-calib-summary').classList.add('hidden');
+            }
         }
 
         document.getElementById('calib-picker').addEventListener('change', (e) => {
@@ -1204,6 +1233,9 @@
                         document.getElementById('analysis-verification-area').classList.remove('hidden');
                         renderStackedPlot('plot-stacked-sample', data.plot_data.stacked_data);
                         showProcessingWizard('analysis');
+                        // Auto-filter calibrations to match this dataset's vendor
+                        const uploadedVendor = data.plot_data?.exp_params?.vendor || null;
+                        if (uploadedVendor) filterCalibrationsByVendor(uploadedVendor);
                     }
                     
                     // Initialize FFT points dropdown based on collected data
@@ -2038,7 +2070,8 @@
                     delta: lastAnalysisResult.delta,
                     big_delta: lastAnalysisResult.big_delta,
                     slope: lastAnalysisResult.fit_slope,
-                    intercept: lastAnalysisResult.fit_intercept
+                    intercept: lastAnalysisResult.fit_intercept,
+                    vendor: lastAnalysisResult?.vendor || 'bruker'
                 })
             })
             .then(res => res.json())

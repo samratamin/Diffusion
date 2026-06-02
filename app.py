@@ -83,6 +83,12 @@ def init_db():
             )
         """)
 
+        # Migration: add vendor column to calibrations if it doesn't exist yet
+        try:
+            cursor.execute("ALTER TABLE calibrations ADD COLUMN vendor TEXT DEFAULT 'bruker'")
+        except Exception:
+            pass  # Column already exists
+
         conn.commit()
         conn.close()
     except Exception as e:
@@ -184,7 +190,7 @@ def admin_panel():
     conn = sqlite3.connect(DB_FILE)
     conn.row_factory = sqlite3.Row
     cals = conn.execute(
-        "SELECT id, name, timestamp, max_g_gauss, delta, big_delta, fit_slope, fit_intercept "
+        "SELECT id, name, timestamp, max_g_gauss, delta, big_delta, fit_slope, fit_intercept, vendor "
         "FROM calibrations ORDER BY timestamp DESC"
     ).fetchall()
     conn.close()
@@ -2123,13 +2129,14 @@ def process_nmr_data(extract_dir, lb=1.0, fft_points=None):
 def get_calibrations():
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    cursor.execute("SELECT id, name, timestamp, max_g_gauss, delta, big_delta, fit_slope, fit_intercept FROM calibrations ORDER BY timestamp DESC")
+    cursor.execute("SELECT id, name, timestamp, max_g_gauss, delta, big_delta, fit_slope, fit_intercept, vendor FROM calibrations ORDER BY timestamp DESC")
     rows = cursor.fetchall()
     conn.close()
     return jsonify([{
-        'id': r[0], 'name': r[1], 'timestamp': r[2], 
+        'id': r[0], 'name': r[1], 'timestamp': r[2],
         'max_g': r[3], 'delta': r[4], 'big_delta': r[5],
-        'slope': r[6], 'intercept': r[7]
+        'slope': r[6], 'intercept': r[7],
+        'vendor': r[8] or 'bruker'
     } for r in rows])
 
 @app.route('/get_standards', methods=['GET'])
@@ -2286,14 +2293,15 @@ def save_calibration():
     big_delta = data.get('big_delta')
     slope = data.get('slope')
     intercept = data.get('intercept')
+    vendor = data.get('vendor', 'bruker')
 
     try:
         conn = sqlite3.connect(DB_FILE)
         cursor = conn.cursor()
         cursor.execute("""
-            INSERT INTO calibrations (name, max_g_gauss, delta, big_delta, fit_slope, fit_intercept)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (name, max_g, delta, big_delta, slope, intercept))
+            INSERT INTO calibrations (name, max_g_gauss, delta, big_delta, fit_slope, fit_intercept, vendor)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (name, max_g, delta, big_delta, slope, intercept, vendor))
         conn.commit()
         conn.close()
         return jsonify({'message': 'Calibration saved successfully'})
