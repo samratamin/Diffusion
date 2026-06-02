@@ -1328,7 +1328,11 @@ def upload_file():
                 plot_data['standard_name'] = standard_type
             
             data_id = str(uuid.uuid4())
-            _nmr_data_store[data_id] = plot_data
+            # Store a slim entry: omit browser-only keys and use float32 numpy for spectra
+            _BROWSER_ONLY_KEYS = ('stacked_data', 'stacked_layout', 'selection_data')
+            store_entry = {k: v for k, v in plot_data.items() if k not in _BROWSER_ONLY_KEYS}
+            store_entry['raw_spectra'] = np.array(plot_data['raw_spectra'], dtype=np.float32)
+            _nmr_data_store[data_id] = store_entry
             # Strip server-only keys (complex spectra) before sending to browser
             response_plot_data = {k: v for k, v in plot_data.items() if not k.startswith('_')}
 
@@ -1572,10 +1576,8 @@ def apply_processing():
         processed_list = [safe_list(sp) for sp in corrected_norm]
 
         if not preview:
-            # Permanently update stored spectra for subsequent analysis
-            plot_data['raw_spectra'] = processed_list
-            if plot_data.get('selection_data'):
-                plot_data['selection_data'][0]['y'] = processed_list[0]
+            # Permanently update stored spectra for subsequent analysis (float32 numpy)
+            plot_data['raw_spectra'] = corrected_norm.astype(np.float32)
 
         response = {'raw_spectra': processed_list, 'ppm': ppm.tolist()}
         if preview and baseline_0 is not None:
