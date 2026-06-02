@@ -2334,4 +2334,4 @@ def save_calibration():
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
-    app.run(port=3000, debug=True)
+    app.run(port=3000, debug=True, use_reloader=False)
