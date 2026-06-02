@@ -607,6 +607,9 @@
         // ============================================================
         let currentWizardStep = 1;
         let currentWorkflow = 'analysis';
+        // Debounce + abort state for server-side preview requests
+        let _phaseTimer = null; let _phaseAbort = null;
+        let _baselineTimer = null; let _baselineAbort = null;
 
         function showProcessingWizard(workflow = 'analysis') {
             currentWorkflow = workflow;
@@ -825,23 +828,29 @@
                 return;
             }
 
-            // Fallback: server round-trip
+            // Fallback: server round-trip — debounced to prevent flooding
             if (!currentDataId) return;
-            fetch('/phase_spectrum', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ data_id: currentDataId, ph0, ph1, pivot_ppm: pivot, lb, fft_points: fftPoints })
-            })
-            .then(r => { if (!r.ok) throw new Error(`Server ${r.status}`); return r.json(); })
-            .then(d => {
-                if (d.phased_spectra) {
-                    renderWizardPlot('plot-phase-preview', [d.phased_spectra[0]], d.ppm);
-                    currentNmrData.processing_lb = lb;
-                    currentNmrData.processing_fft_points = fftPoints;
-                    currentNmrData.raw_ppm = d.ppm;
-                }
-            })
-            .catch(e => console.error('Phase preview error:', e));
+            if (_phaseTimer) clearTimeout(_phaseTimer);
+            if (_phaseAbort) { _phaseAbort.abort(); _phaseAbort = null; }
+            _phaseTimer = setTimeout(() => {
+                _phaseAbort = new AbortController();
+                fetch('/phase_spectrum', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ data_id: currentDataId, ph0, ph1, pivot_ppm: pivot, lb, fft_points: fftPoints }),
+                    signal: _phaseAbort.signal
+                })
+                .then(r => { if (!r.ok) throw new Error(`Server ${r.status}`); return r.json(); })
+                .then(d => {
+                    if (d.phased_spectra) {
+                        renderWizardPlot('plot-phase-preview', [d.phased_spectra[0]], d.ppm);
+                        currentNmrData.processing_lb = lb;
+                        currentNmrData.processing_fft_points = fftPoints;
+                        currentNmrData.raw_ppm = d.ppm;
+                    }
+                })
+                .catch(e => { if (e.name !== 'AbortError') console.error('Phase preview error:', e); });
+            }, 150);
         }
 
         function renderWizardPlot(divId, spectra, ppm) {
@@ -976,19 +985,25 @@
             }
 
             if (needsServerReprocess) {
-                fetch('/apply_processing', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ data_id: currentDataId, ph0, ph1,
-                        pivot_ppm: pivot, baseline_order: baselineOrder, preview: true, lb, fft_points: fftPoints })
-                })
-                .then(r => { if (!r.ok) throw new Error(`Server ${r.status}`); return r.json(); })
-                .then(d => {
-                    if (d.raw_spectra && d.raw_spectra.length > 0) {
-                        renderBaselinePlot('plot-baseline-preview', d.raw_spectra[0], null, d.ppm);
-                    }
-                })
-                .catch(e => console.error('Baseline preview error:', e));
+                if (_baselineTimer) clearTimeout(_baselineTimer);
+                if (_baselineAbort) { _baselineAbort.abort(); _baselineAbort = null; }
+                _baselineTimer = setTimeout(() => {
+                    _baselineAbort = new AbortController();
+                    fetch('/apply_processing', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ data_id: currentDataId, ph0, ph1,
+                            pivot_ppm: pivot, baseline_order: baselineOrder, preview: true, lb, fft_points: fftPoints }),
+                        signal: _baselineAbort.signal
+                    })
+                    .then(r => { if (!r.ok) throw new Error(`Server ${r.status}`); return r.json(); })
+                    .then(d => {
+                        if (d.raw_spectra && d.raw_spectra.length > 0) {
+                            renderBaselinePlot('plot-baseline-preview', d.raw_spectra[0], null, d.ppm);
+                        }
+                    })
+                    .catch(e => { if (e.name !== 'AbortError') console.error('Baseline preview error:', e); });
+                }, 150);
                 return;
             }
 
@@ -996,20 +1011,26 @@
             const instant = applyPhaseJS(ph0, ph1, pivot);
             if (instant) renderBaselinePlot('plot-baseline-preview', instant.spectrum, null, instant.ppm);
 
-            fetch('/apply_processing', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ data_id: currentDataId, ph0, ph1,
-                    pivot_ppm: pivot, baseline_order: baselineOrder, preview: true, lb, fft_points: fftPoints })
-            })
-            .then(r => r.json())
-            .then(d => {
-                if (instant && d.baseline_0) {
-                    renderBaselinePlot('plot-baseline-preview', instant.spectrum, d.baseline_0,
-                                      instant.ppm);
-                }
-            })
-            .catch(e => console.error('Baseline preview error:', e));
+            if (_baselineTimer) clearTimeout(_baselineTimer);
+            if (_baselineAbort) { _baselineAbort.abort(); _baselineAbort = null; }
+            _baselineTimer = setTimeout(() => {
+                _baselineAbort = new AbortController();
+                fetch('/apply_processing', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ data_id: currentDataId, ph0, ph1,
+                        pivot_ppm: pivot, baseline_order: baselineOrder, preview: true, lb, fft_points: fftPoints }),
+                    signal: _baselineAbort.signal
+                })
+                .then(r => r.json())
+                .then(d => {
+                    if (instant && d.baseline_0) {
+                        renderBaselinePlot('plot-baseline-preview', instant.spectrum, d.baseline_0,
+                                          instant.ppm);
+                    }
+                })
+                .catch(e => { if (e.name !== 'AbortError') console.error('Baseline preview error:', e); });
+            }, 150);
         }
 
         async function applyProcessingAndContinue() {
