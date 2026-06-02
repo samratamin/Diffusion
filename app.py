@@ -1723,11 +1723,20 @@ def process_nmr_data(extract_dir, lb=1.0, fft_points=None):
         try:
             acqus_path = os.path.join(data_path, 'acqus')
             if os.path.exists(acqus_path):
-                # P[30] is the pulse duration for the gradient half-pulse in stebpgp1s
+                # P[30] is the gradient half-lobe duration in stebpgp1s/stebpgp1s19;
+                # total delta = 2 * P[30].  P[40] (if populated) often stores the
+                # full gradient duration directly (= 2*P[30]) and serves as fallback
+                # for sequences that don't use P[30].
                 val_p30 = get_bruker_item(dic, acqus_path, 'P', 30)
-                if val_p30 is not None:
+                if val_p30 is not None and val_p30 > 0:
                     # Little delta (total gradient duration) = 2 * P[30]
                     params['delta'] = 2.0 * val_p30 / 1000000.0
+                else:
+                    # Fallback: some sequences store the full gradient pulse
+                    # duration in P[40] (= 2*P[30] in stebpgp1s-family).
+                    val_p40 = get_bruker_item(dic, acqus_path, 'P', 40)
+                    if val_p40 is not None and val_p40 > 0:
+                        params['delta'] = val_p40 / 1000000.0
                 
                 # D[20] is the diffusion time (Big Delta)
                 val_d20 = get_bruker_item(dic, acqus_path, 'D', 20)
@@ -1739,6 +1748,7 @@ def process_nmr_data(extract_dir, lb=1.0, fft_points=None):
                 val_d16 = get_bruker_item(dic, acqus_path, 'D', 16)
                 if val_d16 is not None:
                     params['tau_bipolar'] = val_d16
+                print(f"[Bruker param extraction] delta={params.get('delta')} big_delta={params.get('big_delta')} tau={params.get('tau_bipolar')} P30={val_p30} D20={val_d20} D16={val_d16}")
             # Check for difflist
             difflist_path = os.path.join(data_path, 'difflist')
             if os.path.exists(difflist_path):
@@ -2146,7 +2156,12 @@ def analyze_peak():
         missing_params.append('big_delta')
     if missing_params:
         return jsonify({
-            'error': 'Dataset is missing required diffusion timing parameter(s): ' + ', '.join(missing_params)
+            'error': (
+                'Dataset is missing required diffusion timing parameter(s): '
+                + ', '.join(missing_params)
+                + '. For Bruker data, delta is read from P[30] (or P[40]) in acqus; '
+                  'big_delta from D[20]. Re-upload or check that acqus contains these values.'
+            )
         }), 400
     
     # If no diff_ramp provided, default to linear 0.02 to 0.95
