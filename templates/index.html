@@ -620,10 +620,21 @@
             const noneRadio = document.querySelector('input[name="baseline-method"][value="-1"]');
             if (noneRadio) noneRadio.checked = true;
 
-            // Show wizard step 1
+            // Show wizard step 1 and reset badges
             currentWizardStep = 1;
             document.getElementById('proc-step-1').classList.remove('hidden');
             document.getElementById('proc-step-2').classList.add('hidden');
+            [1, 2, 3].forEach(i => {
+                const _b = document.getElementById(`wizard-badge-${i}`);
+                const _l = document.getElementById(`wizard-label-${i}`);
+                if (i === 1) {
+                    _b.className = 'w-7 h-7 rounded-full flex items-center justify-center text-xs font-black bg-blue-600 text-white';
+                    _l.className = 'text-[10px] font-black uppercase tracking-widest text-blue-600';
+                } else {
+                    _b.className = 'w-7 h-7 rounded-full flex items-center justify-center text-xs font-black bg-gray-200 text-gray-400';
+                    _l.className = 'text-[10px] font-black uppercase tracking-widest text-gray-400';
+                }
+            });
             document.getElementById('processing-wizard').classList.remove('hidden');
             document.getElementById('analysis-workspace').classList.add('hidden');
             document.getElementById('calib-workspace').classList.add('hidden');
@@ -633,9 +644,11 @@
         }
 
         function wizardGoToStep(step) {
-            document.getElementById(`proc-step-${currentWizardStep}`).classList.add('hidden');
+            const _wPrev = document.getElementById(`proc-step-${currentWizardStep}`);
+            if (_wPrev) _wPrev.classList.add('hidden');
             currentWizardStep = step;
-            document.getElementById(`proc-step-${step}`).classList.remove('hidden');
+            const _wNext = document.getElementById(`proc-step-${step}`);
+            if (_wNext) _wNext.classList.remove('hidden');
 
             // Update step indicator badges
             [1, 2, 3].forEach(i => {
@@ -838,6 +851,7 @@
                 line: { width: 1.2, color: '#2563eb' }, name: 'Slice 1', showlegend: false }];
             Plotly.react(divId, traces, {
                 title: false, margin: { l: 55, r: 15, t: 10, b: 40 },
+                uirevision: currentDataId,
                 xaxis: { title: 'PPM', autorange: 'reversed', gridcolor: '#f3f4f6', zeroline: false },
                 yaxis: { gridcolor: '#f3f4f6', zeroline: true, zerolinecolor: '#6b7280', zerolinewidth: 1.5 },
                 paper_bgcolor: '#f9fafb', plot_bgcolor: '#f9fafb'
@@ -924,6 +938,7 @@
             }
             Plotly.react(divId, traces, {
                 title: false, margin: { l: 55, r: 15, t: 10, b: 40 },
+                uirevision: currentDataId,
                 xaxis: { title: 'PPM', autorange: 'reversed', gridcolor: '#f3f4f6', zeroline: false },
                 yaxis: { gridcolor: '#f3f4f6', zeroline: true, zerolinecolor: '#6b7280', zerolinewidth: 1.5 },
                 paper_bgcolor: '#f9fafb', plot_bgcolor: '#f9fafb',
@@ -1047,7 +1062,7 @@
         }
 
         function proceedAfterProcessing() {
-            document.getElementById('processing-wizard').classList.add('hidden');
+            wizardGoToStep(3);  // marks step 3 active, keeps progress bar visible
             if (currentWorkflow === 'calibration') {
                 document.getElementById('calib-workspace').classList.remove('hidden');
                 renderSelectionPlot('plot-selection', currentNmrData, handleCalibrationPeakClick);
