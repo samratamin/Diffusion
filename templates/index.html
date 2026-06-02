@@ -647,6 +647,10 @@
             document.getElementById('analysis-workspace').classList.add('hidden');
             document.getElementById('calib-workspace').classList.add('hidden');
 
+            // Purge plot divs so zoom/state from any previous dataset is fully cleared
+            Plotly.purge('plot-phase-preview');
+            Plotly.purge('plot-baseline-preview');
+
             // Initial preview (magnitude-equivalent at ph0=0)
             updatePhasePreview();
         }
@@ -1305,20 +1309,20 @@
                         // 2. Render Stacked Plot for verification
                         renderStackedPlot('plot-stacked-calib', data.plot_data.stacked_data);
 
+                        initializeFFTPointsDropdown(currentNmrData);
                         showProcessingWizard('calibration');
                     } else {
                         // Swap: Hide upload box, show stacked plot + processing wizard
                         document.getElementById('analysis-upload-area').classList.add('hidden');
                         document.getElementById('analysis-verification-area').classList.remove('hidden');
                         renderStackedPlot('plot-stacked-sample', data.plot_data.stacked_data);
+                        initializeFFTPointsDropdown(currentNmrData);
                         showProcessingWizard('analysis');
                         // Auto-filter calibrations to match this dataset's vendor
                         const uploadedVendor = data.plot_data?.exp_params?.vendor || null;
                         if (uploadedVendor) filterCalibrationsByVendor(uploadedVendor);
                     }
                     
-                    // Initialize FFT points dropdown based on collected data
-                    initializeFFTPointsDropdown(currentNmrData);
                 }
             });
         }
