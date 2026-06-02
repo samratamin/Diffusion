@@ -1417,14 +1417,24 @@ def auto_phase():
         def neg_area_2d(params):
             return neg_area(params[0], params[1])
 
-        # Step 1: grid search over ph0 (ph1=0) to find the global basin
-        grid = np.arange(-180.0, 180.0, 2.0)
-        grid_scores = np.array([neg_area(p, 0.0) for p in grid])
-        best_ph0 = float(grid[np.argmin(grid_scores)])
+        # Step 1a: vectorized coarse grid (5° steps) on downsampled spectrum
+        downsample = max(1, n_pts // 4096)
+        sp0_ds = sp0[::downsample]
+        fa_ds   = freq_axis[::downsample]
+        coarse_grid = np.arange(-180.0, 180.0, 5.0)          # 72 angles
+        ph0_rad = np.deg2rad(coarse_grid)[:, np.newaxis]       # (72,1)
+        phased_grid = np.real(sp0_ds[np.newaxis, :] * np.exp(1j * ph0_rad))
+        coarse_scores = np.sum(np.maximum(-phased_grid, 0.0), axis=1)
+        best_coarse = float(coarse_grid[np.argmin(coarse_scores)])
+
+        # Step 1b: fine serial search in ±10° window on full spectrum (1° steps)
+        fine_grid = np.arange(best_coarse - 10.0, best_coarse + 11.0, 1.0)
+        fine_scores = np.array([neg_area(p, 0.0) for p in fine_grid])
+        best_ph0 = float(fine_grid[np.argmin(fine_scores)])
 
         # Step 2: 2D Nelder-Mead refines both ph0 and ph1 jointly
         result = minimize(neg_area_2d, [best_ph0, 0.0], method='Nelder-Mead',
-                          options={'xatol': 0.05, 'fatol': 1.0, 'maxiter': 5000,
+                          options={'xatol': 0.1, 'fatol': 1.0, 'maxiter': 600,
                                    'adaptive': True})
         ph0_best, ph1_best = result.x
         # Wrap ph0 to [-180, 180]

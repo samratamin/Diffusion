@@ -841,12 +841,29 @@
             }, { responsive: true, displayModeBar: false });
         }
 
+        function _setPhaseControlsDisabled(disabled) {
+            const ids = ['ph0-slider','ph1-slider','lb-slider','fft-points-select','pivot-ppm'];
+            ids.forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.disabled = disabled;
+            });
+            // Buttons without IDs — find them inside proc-step-1
+            const step1 = document.getElementById('proc-step-1');
+            if (step1) {
+                step1.querySelectorAll('button:not(#btn-auto-phase)').forEach(b => b.disabled = disabled);
+            }
+            // Dim the sliders/controls area visually
+            const step1Body = step1 ? step1.querySelector('.grid') : null;
+            if (step1Body) step1Body.style.opacity = disabled ? '0.45' : '';
+        }
+
         async function autoPhaseSpectrum() {
             if (!currentDataId) return;
             const btn = document.getElementById('btn-auto-phase');
             const origHtml = btn.innerHTML;
             btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i> Phasing...';
             btn.disabled = true;
+            _setPhaseControlsDisabled(true);
             try {
                 const pivotVal = document.getElementById('pivot-ppm').value;
                 const r = await fetch('/auto_phase', {
@@ -868,7 +885,11 @@
                     updatePhasePreview();  // instant via client-side JS
                 }
             } catch (e) { console.error('Auto-phase error:', e); }
-            finally { btn.innerHTML = origHtml; btn.disabled = false; }
+            finally {
+                btn.innerHTML = origHtml;
+                btn.disabled = false;
+                _setPhaseControlsDisabled(false);
+            }
         }
 
         function resetPhase() {
