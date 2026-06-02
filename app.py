@@ -1734,11 +1734,11 @@ def process_nmr_data(extract_dir, lb=1.0, fft_points=None):
                 if val_d20 is not None:
                     params['big_delta'] = val_d20
 
-                # D[21] is the inter-bipolar-gradient delay τ used in
-                # bipolar PGSTE sequences (dbppste, bppste)
-                val_d21 = get_bruker_item(dic, acqus_path, 'D', 21)
-                if val_d21 is not None:
-                    params['tau_bipolar'] = val_d21
+                # D[16] is the inter-bipolar-gradient delay τ used in
+                # Bruker bipolar PGSTE sequences (stebpgp1s, stebpgp1s19, etc.)
+                val_d16 = get_bruker_item(dic, acqus_path, 'D', 16)
+                if val_d16 is not None:
+                    params['tau_bipolar'] = val_d16
             # Check for difflist
             difflist_path = os.path.join(data_path, 'difflist')
             if os.path.exists(difflist_path):
@@ -1868,6 +1868,16 @@ def process_nmr_data(extract_dir, lb=1.0, fft_points=None):
         params['sequence_type'] = sequence_type
         params['gradient_shape'] = gradient_shape
         params['gradient_shape_factor'] = gradient_shape_factor
+
+        # --- Bipolar inter-lobe delay (tau_bipolar / τ) ---
+        # For Varian bipolar PGSTE (Dbppste, bppste, dbppste_cc):
+        #   gstab  = stabilisation delay between the two lobes of each bipolar pair
+        #   This is τ in the equation: b = (γgδ)²·(Δ − δ/3 − τ/2)
+        if sequence_type == 'PGSTE':
+            tau_v = first_pp_value(['gstab', 'tDELTA', 'tau1', 'tau'])
+            params['tau_bipolar'] = float(tau_v) if tau_v is not None else 0.0
+        else:
+            params['tau_bipolar'] = 0.0
 
         # --- Spectrometer frequency, spectral width, and transmitter offset ---
         sfrq_v = get_pp('sfrq', default=None)   # MHz
