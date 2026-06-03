@@ -210,12 +210,7 @@
 
                     <!-- RIGHT COLUMN: Upload Box (Swaps for Plot) -->
                     <div class="lg:col-span-8">
-                        <div id="analysis-upload-locked" class="flex flex-col items-center justify-center h-[250px] rounded-3xl border-2 border-dashed border-gray-200 bg-gray-50">
-                            <i class="fas fa-lock text-4xl text-gray-300 mb-3"></i>
-                            <p class="text-gray-400 text-sm font-bold">Select a calibration profile first</p>
-                            <p class="text-[10px] text-gray-400 mt-1">Choose a saved profile on the left to enable data upload</p>
-                        </div>
-                        <div id="analysis-upload-area" class="hidden flex flex-col">
+                        <div id="analysis-upload-area" class="flex flex-col">
                             <h3 class="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">Step 2: Data Source</h3>
                             <div id="dropzone-sample" class="dropzone p-10 rounded-3xl text-center cursor-pointer bg-white shadow-sm hover:shadow-md transition-all flex flex-col justify-center border-2 border-dashed border-green-200 h-[250px]">
                                 <div id="dropzone-text-sample">
@@ -1127,6 +1122,10 @@
 
         async function applyProcessingAndContinue() {
             if (!currentDataId) return;
+            if (currentWorkflow === 'analysis' && !selectedCalibration) {
+                alert('Please select a calibration profile before proceeding.');
+                return;
+            }
             const ph0 = parseFloat(document.getElementById('ph0-slider').value);
             const ph1 = parseFloat(document.getElementById('ph1-slider').value);
             const pivotVal = document.getElementById('pivot-ppm').value;
@@ -1170,6 +1169,10 @@
         }
 
         function skipProcessing() {
+            if (currentWorkflow === 'analysis' && !selectedCalibration) {
+                alert('Please select a calibration profile before proceeding.');
+                return;
+            }
             // Use magnitude spectra as-is (legacy behaviour)
             proceedAfterProcessing();
         }
@@ -1216,14 +1219,7 @@
         }
 
         function resetAnalysisUpload() {
-            // Show upload or locked based on whether calibration is selected
-            if (selectedCalibration) {
-                document.getElementById('analysis-upload-area').classList.remove('hidden');
-                document.getElementById('analysis-upload-locked').classList.add('hidden');
-            } else {
-                document.getElementById('analysis-upload-area').classList.add('hidden');
-                document.getElementById('analysis-upload-locked').classList.remove('hidden');
-            }
+            document.getElementById('analysis-upload-area').classList.remove('hidden');
             document.getElementById('analysis-verification-area').classList.add('hidden');
             document.getElementById('processing-wizard').classList.add('hidden');
             document.getElementById('analysis-workspace').classList.add('hidden');
@@ -1278,10 +1274,14 @@
                 note.classList.add('hidden');
             }
 
-            // Always clear selection — force user to choose explicitly
-            picker.value = '';
-            selectedCalibration = null;
-            document.getElementById('selected-calib-summary').classList.add('hidden');
+            // Preserve selection if previously selected calibration is still in the filtered list
+            if (selectedCalibration && filtered.some(c => c.id == selectedCalibration.id)) {
+                picker.value = selectedCalibration.id;  // keep it
+            } else {
+                picker.value = '';
+                selectedCalibration = null;
+                document.getElementById('selected-calib-summary').classList.add('hidden');
+            }
             if (vendor && filtered.length === 0) {
                 const note = document.getElementById('calib-vendor-filter-note');
                 document.getElementById('calib-vendor-filter-text').textContent =
@@ -1322,20 +1322,8 @@
                     </div>
                 `;
                 summary.classList.remove('hidden');
-                // Unlock upload area if not already showing uploaded data
-                const _vArea2 = document.getElementById('analysis-verification-area');
-                if (_vArea2 && _vArea2.classList.contains('hidden')) {
-                    document.getElementById('analysis-upload-locked').classList.add('hidden');
-                    document.getElementById('analysis-upload-area').classList.remove('hidden');
-                }
             } else {
                 summary.classList.add('hidden');
-                // Re-lock upload area if no data has been uploaded yet
-                const _vArea = document.getElementById('analysis-verification-area');
-                if (_vArea && _vArea.classList.contains('hidden')) {
-                    document.getElementById('analysis-upload-area').classList.add('hidden');
-                    document.getElementById('analysis-upload-locked').classList.remove('hidden');
-                }
             }
         });
 
