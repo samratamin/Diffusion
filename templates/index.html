@@ -2032,8 +2032,10 @@
             eqBanner.classList.remove('hidden');
 
             // Render Decay Plot (Multiple series if multiple peaks)
+            const PEAK_COLORS = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf'];
             const plotData = [];
-            data.results.forEach(res => {
+            data.results.forEach((res, peakIdx) => {
+                const peakColor = PEAK_COLORS[peakIdx % PEAK_COLORS.length];
                 // 1. Experimental Data Points (Split into Included vs Omitted)
                 const inclX = [], inclY = [], omitX = [], omitY = [];
                 res.gradients.forEach((g, i) => {
@@ -2048,7 +2050,7 @@
                     x: inclX, y: inclY,
                     mode: 'markers',
                     name: `${res.ppm} ppm`,
-                    marker: { size: 8 }
+                    marker: { size: 8, color: peakColor }
                 });
 
                 if (omitX.length > 0) {
@@ -2068,7 +2070,7 @@
                         y: res.fit_line.y,
                         mode: 'lines',
                         name: `Fit (${res.ppm.toFixed(2)} ppm)`,
-                        line: { width: 2, shape: 'spline' }
+                        line: { width: 2, shape: 'spline', color: peakColor }
                     });
                 } else {
                     // Fallback
@@ -2077,7 +2079,7 @@
                         y: res.fit_intensities,
                         mode: 'lines',
                         name: `Fit (${res.ppm.toFixed(2)} ppm)`,
-                        line: { dash: 'dot', width: 1 }
+                        line: { dash: 'dot', width: 1, color: peakColor }
                     });
                 }
             });
@@ -2096,11 +2098,11 @@
 
             // Fill Table
             const tbody = document.getElementById('diffusion-results-body');
-            tbody.innerHTML = data.results.map(res => `
+            tbody.innerHTML = data.results.map((res, idx) => `
                 <tr class="hover:bg-gray-50 transition-colors">
                     <td class="px-4 py-3 font-mono font-bold">${res.ppm.toFixed(3)}</td>
                     <td class="px-4 py-3 font-mono text-gray-500">${res.r_squared.toFixed(4)}</td>
-                    <td class="px-4 py-3 font-mono text-green-700 font-bold">${res.d_value.toExponential(3)}</td>
+                    <td class="px-4 py-3 font-mono font-bold" style="color: ${PEAK_COLORS[idx % PEAK_COLORS.length]}">${res.d_value.toExponential(3)}</td>
                     <td class="px-4 py-3 text-right font-mono text-gray-400">${(res.error_pct * 100).toFixed(1)}%</td>
                     <td class="px-4 py-3 text-right">
                         <button onclick="showVerification()" class="text-blue-600 hover:text-blue-800 font-bold text-[10px] uppercase tracking-wider">

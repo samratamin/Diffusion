@@ -876,7 +876,8 @@ def _build_readme(results, params, calibration, vendor, pulse_program,
 def _build_publication_info(results, params, calibration, vendor, pulse_program,
                             delta, big_delta, ph0, ph1, baseline_order,
                             peaks_ppm, method, detected_standard, calibration_name,
-                            lb=1.0, fft_points=None, exp_params_full=None):
+                            lb=1.0, fft_points=None, exp_params_full=None,
+                            sequence_type='PGSE', tau_bipolar=0.0):
     """Build a publication-ready Methods blurb with all available parameters filled in."""
     if not results:
         return "No analysis results available."
@@ -1077,7 +1078,8 @@ def download_analysis():
             results, params, calibration, vendor, pulse_program,
             delta, big_delta, ph0, ph1, baseline_order,
             peaks_ppm, method, detected_standard, calibration_name,
-            lb, fft_points, exp_params_full
+            lb, fft_points, exp_params_full,
+            sequence_type, tau_bipolar
         )
 
         # ── Build CSV data for each peak ──
