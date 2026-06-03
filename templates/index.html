@@ -34,6 +34,10 @@
         <div class="flex items-center border-b mb-8">
             <button onclick="switchTab('calibration')" id="tab-calibration" class="tab-btn px-6 py-3 font-semibold text-gray-500 hover:text-blue-600 transition-all">1. Gradient Calibration</button>
             <button onclick="switchTab('analysis')" id="tab-analysis" class="tab-btn px-6 py-3 font-semibold text-gray-500 hover:text-blue-600 active transition-all">2. Diffusion Analysis</button>
+            <button onclick="switchTab('mydata')" id="tab-mydata" class="tab-btn px-6 py-3 font-semibold text-gray-500 hover:text-blue-600 transition-all relative">
+                3. My Data Analysis
+                <span id="mydata-badge" class="hidden absolute -top-1 -right-1 bg-blue-600 text-white text-[9px] font-bold rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1">0</span>
+            </button>
             <a href="/admin" title="Admin panel" class="ml-auto mr-1 mb-1 p-2 text-gray-300 hover:text-gray-500 transition-colors rounded-lg hover:bg-gray-100"><i class="fas fa-cog text-base"></i></a>
         </div>
 
@@ -581,6 +585,50 @@
         </div>
     </div>
 
+    <!-- My Data Analysis Tab -->
+    <div id="section-mydata" class="tab-content hidden">
+        <div class="max-w-3xl mx-auto">
+            <div class="flex items-center justify-between mb-6">
+                <div>
+                    <h2 class="text-2xl font-bold text-gray-800">My Data Analysis</h2>
+                    <p class="text-sm text-gray-500 mt-1">Analyses you have run this session. Data is kept for 3 days.</p>
+                </div>
+                <button onclick="loadSessionHistory()" class="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-blue-600 border border-blue-200 rounded-xl hover:bg-blue-50 transition-all">
+                    <i class="fas fa-sync-alt"></i> Refresh
+                </button>
+            </div>
+            <div id="history-loading" class="hidden text-center py-12 text-gray-400">
+                <i class="fas fa-spinner fa-spin text-2xl mb-3"></i>
+                <p class="text-sm">Loading history...</p>
+            </div>
+            <div id="history-empty" class="hidden text-center py-16 text-gray-400">
+                <i class="fas fa-flask text-4xl mb-4 opacity-30"></i>
+                <p class="font-semibold text-gray-500">No analyses saved yet</p>
+                <p class="text-sm mt-1">Run a diffusion analysis and it will appear here automatically.</p>
+            </div>
+            <div id="history-list" class="space-y-4"></div>
+        </div>
+    </div>
+
+    <!-- History View Modal -->
+    <div id="modal-history-view" class="fixed inset-0 bg-black bg-opacity-60 backdrop-blur-sm flex items-center justify-center hidden z-50">
+        <div class="bg-white rounded-2xl shadow-2xl max-w-3xl w-full mx-4 flex flex-col" style="max-height:90vh">
+            <div class="flex items-center justify-between px-6 pt-5 pb-4 border-b border-gray-100">
+                <h3 id="modal-history-title" class="text-lg font-bold text-gray-800 truncate mr-4"></h3>
+                <button onclick="closeHistoryModal()" class="text-gray-400 hover:text-gray-700 transition-colors flex-shrink-0">
+                    <i class="fas fa-times text-xl"></i>
+                </button>
+            </div>
+            <div class="overflow-y-auto px-6 py-4 flex-1">
+                <div id="modal-history-plot" style="height:320px"></div>
+                <div id="modal-history-table" class="mt-4"></div>
+            </div>
+            <div class="px-6 pb-5 pt-3 border-t border-gray-100 text-right">
+                <button onclick="closeHistoryModal()" class="px-5 py-2 font-bold text-gray-500 hover:text-gray-700 transition-colors">Close</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Save Modal -->
     <div id="modal-save" class="fixed inset-0 bg-black bg-opacity-60 backdrop-blur-sm flex items-center justify-center hidden z-50">
         <div class="bg-white p-8 rounded-2xl max-w-sm w-full shadow-2xl">
@@ -602,6 +650,19 @@
         let currentDataId = null;
         let lastAnalysisResult = null;
         let calibrations = [];
+        // Browser-persistent session ID for "My Data Analysis" history
+        function _getOrCreateSessionId() {
+            let sid = localStorage.getItem('nmr_session_id');
+            if (!sid) {
+                sid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+                    const r = Math.random() * 16 | 0;
+                    return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+                });
+                localStorage.setItem('nmr_session_id', sid);
+            }
+            return sid;
+        }
+        const _sessionId = _getOrCreateSessionId();
         let selectedCalibration = null;
         let analysisName = '';  // Used for downloaded file naming
         let selectedPeaks = []; // Unified selection location
@@ -1230,6 +1291,9 @@
 
             if (tab === 'analysis') {
                 loadCalibrations();
+            }
+            if (tab === 'mydata') {
+                loadSessionHistory();
             }
         }
 
@@ -1997,6 +2061,7 @@
                 } else {
                     lastAnalysisResult = data;
                     displayDiffusionResults(data, method);
+                    saveAnalysisToSession(data);
                 }
             })
             .catch(err => {
@@ -2308,6 +2373,169 @@
                 if (!s.show_method_intensity_fit)   hideOption('method-intensity-fit-option', 'intensity_max');
             } catch (_) { /* settings unavailable — show everything */ }
         })();
+
+        // ─── Session History ─────────────────────────────────────────────────
+
+        function saveAnalysisToSession(analysisData) {
+            if (!currentDataId || !analysisData || !analysisData.results) return;
+            const name = analysisName || (currentNmrData?.folder_name) || 'Dataset';
+            const summary = {
+                results: analysisData.results.map(r => ({
+                    peak_ppm: r.peak_ppm,
+                    d_value: r.d_value,
+                    d_unit: r.d_unit,
+                    r_squared: r.r_squared,
+                    gradients: r.gradients,
+                    intensities: r.intensities,
+                    fit_line: r.fit_line
+                })),
+                params: analysisData.params
+            };
+            fetch('/session/save_analysis', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    session_id: _sessionId,
+                    data_id: currentDataId,
+                    dataset_name: name,
+                    summary: summary
+                })
+            }).catch(() => {/* silent */});
+        }
+
+        function loadSessionHistory() {
+            document.getElementById('history-loading').classList.remove('hidden');
+            document.getElementById('history-empty').classList.add('hidden');
+            document.getElementById('history-list').innerHTML = '';
+            fetch(`/session/history/${_sessionId}`)
+                .then(r => r.json())
+                .then(items => {
+                    document.getElementById('history-loading').classList.add('hidden');
+                    if (!items.length) {
+                        document.getElementById('history-empty').classList.remove('hidden');
+                        _updateHistoryBadge(0);
+                        return;
+                    }
+                    _updateHistoryBadge(items.length);
+                    const container = document.getElementById('history-list');
+                    container.innerHTML = items.map(item => _renderHistoryCard(item)).join('');
+                })
+                .catch(() => {
+                    document.getElementById('history-loading').classList.add('hidden');
+                });
+        }
+
+        function _updateHistoryBadge(count) {
+            const badge = document.getElementById('mydata-badge');
+            if (count > 0) {
+                badge.textContent = count > 99 ? '99+' : count;
+                badge.classList.remove('hidden');
+            } else {
+                badge.classList.add('hidden');
+            }
+        }
+
+        function _renderHistoryCard(item) {
+            const PEAK_COLORS = ['#1f77b4','#ff7f0e','#2ca02c','#d62728','#9467bd','#8c564b','#e377c2','#7f7f7f','#bcbd22','#17becf'];
+            const d = new Date(item.created_at * 1000);
+            const dateStr = d.toLocaleDateString(undefined, {month:'short', day:'numeric'}) + ' ' +
+                            d.toLocaleTimeString(undefined, {hour:'2-digit', minute:'2-digit'});
+            const results = item.summary?.results || [];
+            const peakChips = results.map((r, idx) => {
+                const col = PEAK_COLORS[idx % PEAK_COLORS.length];
+                return `<span class="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-mono bg-gray-50 border border-gray-200">
+                    <span style="color:${col}" class="font-bold">${r.d_value ? r.d_value.toExponential(2) : '—'}</span>
+                    <span class="text-gray-400">m²/s</span>
+                    <span class="text-gray-500 text-[10px]">${r.peak_ppm !== undefined ? r.peak_ppm.toFixed(2) + ' ppm' : ''}</span>
+                </span>`;
+            }).join('');
+            const escapedName = (item.dataset_name||'').replace(/'/g, "\'");
+            return `<div class="bg-white border border-gray-200 rounded-xl p-4 shadow-sm hover:shadow-md transition-shadow">
+                <div class="flex items-start justify-between gap-3">
+                    <div class="min-w-0">
+                        <div class="font-bold text-gray-800 text-sm truncate">${_escHtml(item.dataset_name || 'Dataset')}</div>
+                        <div class="text-xs text-gray-400 mt-0.5">${dateStr}</div>
+                    </div>
+                    <button onclick="deleteHistoryItem('${item.data_id}')" title="Delete" class="text-gray-300 hover:text-red-500 transition-colors flex-shrink-0 mt-0.5">
+                        <i class="fas fa-trash-alt text-sm"></i>
+                    </button>
+                </div>
+                <div class="mt-3 flex flex-wrap gap-2">${peakChips || '<span class="text-xs text-gray-400">No peaks</span>'}</div>
+                <button onclick="viewHistoryItem('${item.data_id}', '${escapedName}', ${JSON.stringify(item.summary).replace(/</g,'\u003c')})"
+                        class="mt-3 text-xs font-semibold text-blue-600 hover:text-blue-800 transition-colors">
+                    <i class="fas fa-chart-line mr-1"></i> View Decay Plot
+                </button>
+            </div>`;
+        }
+
+        function _escHtml(str) {
+            return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+        }
+
+        function viewHistoryItem(dataId, name, summary) {
+            document.getElementById('modal-history-title').textContent = name || 'Analysis';
+            document.getElementById('modal-history-view').classList.remove('hidden');
+            const PEAK_COLORS = ['#1f77b4','#ff7f0e','#2ca02c','#d62728','#9467bd','#8c564b','#e377c2','#7f7f7f','#bcbd22','#17becf'];
+            const results = summary?.results || [];
+            const plotData = [];
+            results.forEach((res, idx) => {
+                const col = PEAK_COLORS[idx % PEAK_COLORS.length];
+                const label = res.peak_ppm !== undefined ? res.peak_ppm.toFixed(2) + ' ppm' : 'Peak ' + (idx+1);
+                if (res.gradients && res.intensities) {
+                    plotData.push({
+                        x: res.gradients, y: res.intensities,
+                        mode: 'markers', type: 'scatter',
+                        name: label, marker: { size: 8, color: col }, showlegend: true
+                    });
+                }
+                if (res.fit_line && res.fit_line.x && res.fit_line.y) {
+                    plotData.push({
+                        x: res.fit_line.x, y: res.fit_line.y,
+                        mode: 'lines', type: 'scatter',
+                        name: label + ' fit', line: { width: 2, color: col }, showlegend: false
+                    });
+                }
+            });
+            Plotly.newPlot('modal-history-plot', plotData, {
+                margin: {t:20,b:50,l:60,r:20},
+                xaxis: { title: 'b-factor (s/m²)', tickformat: '.2e' },
+                yaxis: { title: 'Normalised Intensity' },
+                legend: { orientation: 'h', y: -0.25 },
+                paper_bgcolor: 'white', plot_bgcolor: '#f9fafb'
+            }, { responsive: true });
+            // Results table
+            const tableRows = results.map((r, idx) => {
+                const col = PEAK_COLORS[idx % PEAK_COLORS.length];
+                return `<tr class="border-b border-gray-100 last:border-0">
+                    <td class="px-4 py-2 text-sm">${r.peak_ppm !== undefined ? r.peak_ppm.toFixed(2) + ' ppm' : '—'}</td>
+                    <td class="px-4 py-2 font-mono font-bold text-sm" style="color:${col}">${r.d_value ? r.d_value.toExponential(3) : '—'} ${r.d_unit || 'm²/s'}</td>
+                    <td class="px-4 py-2 text-sm text-gray-500">${r.r_squared !== undefined ? r.r_squared.toFixed(4) : '—'}</td>
+                </tr>`;
+            }).join('');
+            document.getElementById('modal-history-table').innerHTML = `
+                <table class="w-full text-left border-collapse">
+                    <thead><tr class="bg-gray-50 text-xs text-gray-500 uppercase tracking-wide">
+                        <th class="px-4 py-2">Peak</th>
+                        <th class="px-4 py-2">D Value</th>
+                        <th class="px-4 py-2">R²</th>
+                    </tr></thead>
+                    <tbody>${tableRows}</tbody>
+                </table>`;
+        }
+
+        function closeHistoryModal() {
+            document.getElementById('modal-history-view').classList.add('hidden');
+            Plotly.purge('modal-history-plot');
+        }
+
+        function deleteHistoryItem(dataId) {
+            if (!confirm('Remove this analysis from history?')) return;
+            fetch(`/session/delete/${dataId}`, { method: 'DELETE' })
+                .then(r => r.json())
+                .then(() => loadSessionHistory())
+                .catch(() => loadSessionHistory());
+        }
+
     </script>
 </body>
 </html>

@@ -15,6 +15,10 @@ import hashlib
 import secrets
 from functools import wraps
 from datetime import datetime
+import threading
+import shutil
+import time
+import re
 
 # In-memory store for uploaded NMR datasets, keyed by session UUID.
 # Capped at 10 entries (LRU eviction) to prevent OOM on busy servers.
@@ -41,7 +45,7 @@ class _LRUStore(OrderedDict):
         self.move_to_end(key)
         return val
 
-_nmr_data_store = _LRUStore(maxsize=10)
+_nmr_data_store = _LRUStore(maxsize=50)
 
 def safe_float(v, fallback=0.0):
     """Return a JSON-safe float, replacing NaN/Inf with fallback."""
@@ -112,6 +116,29 @@ def init_db():
             cursor.execute("ALTER TABLE calibrations ADD COLUMN vendor TEXT DEFAULT 'bruker'")
         except Exception:
             pass  # Column already exists
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_sessions (
+                session_id TEXT NOT NULL,
+                data_id TEXT NOT NULL PRIMARY KEY,
+                dataset_name TEXT,
+                created_at REAL NOT NULL,
+                summary_json TEXT
+            )
+        """)
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_user_sessions ON user_sessions(session_id)"
+        )
+        # Clean up sessions older than 3 days on startup
+        cutoff = time.time() - 3 * 86400
+        old_ids = conn.execute(
+            "SELECT data_id FROM user_sessions WHERE created_at < ?", (cutoff,)
+        ).fetchall()
+        conn.execute("DELETE FROM user_sessions WHERE created_at < ?", (cutoff,))
+        for (did,) in old_ids:
+            old_dir = os.path.join('uploads', did)
+            if os.path.isdir(old_dir):
+                shutil.rmtree(old_dir, ignore_errors=True)
 
         conn.commit()
         conn.close()
@@ -1305,13 +1332,17 @@ def upload_file():
     if file.filename == '':
         return jsonify({'error': 'No selected file'}), 400
     if file and file.filename.endswith('.zip'):
-        # Save zip
+        # Each upload gets its own UUID-namespaced directory to prevent
+        # filename collisions when multiple users upload simultaneously.
+        data_id = str(uuid.uuid4())
         filename = secure_filename(file.filename)
-        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        session_upload_dir = os.path.join(app.config['UPLOAD_FOLDER'], data_id)
+        os.makedirs(session_upload_dir, exist_ok=True)
+        filepath = os.path.join(session_upload_dir, filename)
         file.save(filepath)
 
         # Extract zip
-        extract_dir = os.path.join(app.config['UPLOAD_FOLDER'], os.path.splitext(filename)[0])
+        extract_dir = os.path.join(session_upload_dir, os.path.splitext(filename)[0])
         os.makedirs(extract_dir, exist_ok=True)
         with zipfile.ZipFile(filepath, 'r') as zip_ref:
             zip_ref.extractall(extract_dir)
@@ -1327,8 +1358,6 @@ def upload_file():
             if standard_type:
                 # Store standard name in the response for frontend tracking
                 plot_data['standard_name'] = standard_type
-            
-            data_id = str(uuid.uuid4())
             # Store a slim entry: omit browser-only keys and use float32 numpy for spectra
             _BROWSER_ONLY_KEYS = ('stacked_data', 'stacked_layout', 'selection_data')
             store_entry = {k: v for k, v in plot_data.items() if k not in _BROWSER_ONLY_KEYS}
@@ -2419,6 +2448,127 @@ def save_calibration():
         return jsonify({'message': 'Calibration saved successfully'})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+# ─── Session History Endpoints ───────────────────────────────────────────────
+
+@app.route('/session/save_analysis', methods=['POST'])
+def save_session_analysis():
+    """Save an analysis result to the session history."""
+    try:
+        data = request.json
+        session_id = data.get('session_id', '').strip()
+        data_id = data.get('data_id', '').strip()
+        if not session_id or not data_id:
+            return jsonify({'error': 'session_id and data_id are required'}), 400
+        uuid_re = re.compile(
+            r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.I
+        )
+        if not uuid_re.match(session_id) or not uuid_re.match(data_id):
+            return jsonify({'error': 'Invalid ID format'}), 400
+        dataset_name = str(data.get('dataset_name', 'Unknown Dataset'))[:200]
+        summary = data.get('summary', {})
+        conn = sqlite3.connect(DB_FILE)
+        conn.execute(
+            """INSERT OR REPLACE INTO user_sessions
+               (session_id, data_id, dataset_name, created_at, summary_json)
+               VALUES (?, ?, ?, ?, ?)""",
+            (session_id, data_id, dataset_name, time.time(), json.dumps(summary))
+        )
+        conn.commit()
+        conn.close()
+        return jsonify({'ok': True})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/session/history/<session_id>', methods=['GET'])
+def get_session_history(session_id):
+    """Return saved analyses for a session (most recent first)."""
+    try:
+        uuid_re = re.compile(
+            r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.I
+        )
+        if not uuid_re.match(session_id):
+            return jsonify([])
+        conn = sqlite3.connect(DB_FILE)
+        rows = conn.execute(
+            """SELECT data_id, dataset_name, created_at, summary_json
+               FROM user_sessions WHERE session_id = ?
+               ORDER BY created_at DESC""",
+            (session_id,)
+        ).fetchall()
+        conn.close()
+        items = []
+        for row in rows:
+            try:
+                summary = json.loads(row[3]) if row[3] else {}
+            except Exception:
+                summary = {}
+            items.append({
+                'data_id': row[0],
+                'dataset_name': row[1],
+                'created_at': row[2],
+                'summary': summary
+            })
+        return jsonify(items)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/session/delete/<data_id>', methods=['DELETE'])
+def delete_session_analysis(data_id):
+    """Remove a saved analysis from the session history."""
+    try:
+        uuid_re = re.compile(
+            r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.I
+        )
+        if not uuid_re.match(data_id):
+            return jsonify({'error': 'Invalid ID'}), 400
+        conn = sqlite3.connect(DB_FILE)
+        conn.execute("DELETE FROM user_sessions WHERE data_id = ?", (data_id,))
+        conn.commit()
+        conn.close()
+        if data_id in _nmr_data_store:
+            del _nmr_data_store[data_id]
+        upload_dir = os.path.join(app.config['UPLOAD_FOLDER'], data_id)
+        if os.path.isdir(upload_dir):
+            shutil.rmtree(upload_dir, ignore_errors=True)
+        return jsonify({'ok': True})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+def _cleanup_old_sessions():
+    """Delete session data older than 3 days. Reschedules itself every 6 h."""
+    try:
+        cutoff = time.time() - 3 * 86400
+        conn = sqlite3.connect(DB_FILE)
+        old_rows = conn.execute(
+            "SELECT data_id FROM user_sessions WHERE created_at < ?", (cutoff,)
+        ).fetchall()
+        conn.execute("DELETE FROM user_sessions WHERE created_at < ?", (cutoff,))
+        conn.commit()
+        conn.close()
+        for (did,) in old_rows:
+            if did in _nmr_data_store:
+                del _nmr_data_store[did]
+            upload_dir = os.path.join('uploads', did)
+            if os.path.isdir(upload_dir):
+                shutil.rmtree(upload_dir, ignore_errors=True)
+        if old_rows:
+            print(f"[cleanup] Removed {len(old_rows)} expired session(s).")
+    except Exception as e:
+        print(f"[cleanup] Error: {e}")
+    finally:
+        t = threading.Timer(6 * 3600, _cleanup_old_sessions)
+        t.daemon = True
+        t.start()
+
+
+# Start background cleanup (first run 60 s after startup)
+_t = threading.Timer(60, _cleanup_old_sessions)
+_t.daemon = True
+_t.start()
 
 if __name__ == '__main__':
     app.run(port=3000, debug=True, use_reloader=False)
