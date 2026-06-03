@@ -186,7 +186,8 @@
                             <div class="text-[10px] text-green-900 space-y-1">
                                 <p><span class="font-bold">1.</span> Select a Calibration Profile.</p>
                                 <p><span class="font-bold">2.</span> Upload zipped data on the right.</p>
-                                <p><span class="font-bold">3.</span> Pick peaks in the spectrum.</p>
+                                <p><span class="font-bold">3.</span> Name your analysis &amp; process spectra.</p>
+                                <p><span class="font-bold">4.</span> Pick peaks in the spectrum.</p>
                             </div>
                         </div>
 
@@ -209,7 +210,12 @@
 
                     <!-- RIGHT COLUMN: Upload Box (Swaps for Plot) -->
                     <div class="lg:col-span-8">
-                        <div id="analysis-upload-area" class="flex flex-col">
+                        <div id="analysis-upload-locked" class="flex flex-col items-center justify-center h-[250px] rounded-3xl border-2 border-dashed border-gray-200 bg-gray-50">
+                            <i class="fas fa-lock text-4xl text-gray-300 mb-3"></i>
+                            <p class="text-gray-400 text-sm font-bold">Select a calibration profile first</p>
+                            <p class="text-[10px] text-gray-400 mt-1">Choose a saved profile on the left to enable data upload</p>
+                        </div>
+                        <div id="analysis-upload-area" class="hidden flex flex-col">
                             <h3 class="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">Step 2: Data Source</h3>
                             <div id="dropzone-sample" class="dropzone p-10 rounded-3xl text-center cursor-pointer bg-white shadow-sm hover:shadow-md transition-all flex flex-col justify-center border-2 border-dashed border-green-200 h-[250px]">
                                 <div id="dropzone-text-sample">
@@ -227,7 +233,7 @@
 
                         <!-- Verification Plot (Hidden until Step 2 is complete) -->
                         <div id="analysis-verification-area" class="hidden flex flex-col">
-                            <h3 class="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">Data Verification (Stacked)</h3>
+                            <h3 class="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">Stacked Data Preview</h3>
                             <div class="bg-white border border-gray-200 rounded-3xl shadow-sm overflow-hidden relative min-h-[400px]">
                                 <div id="plot-stacked-sample" class="w-full h-[400px]"></div>
                             </div>
@@ -244,17 +250,37 @@
                 <!-- Step progress -->
                 <div class="flex items-center gap-3 mb-5 px-1">
                     <div id="wizard-badge-1" class="w-7 h-7 rounded-full flex items-center justify-center text-xs font-black bg-blue-600 text-white">1</div>
-                    <span id="wizard-label-1" class="text-[10px] font-black uppercase tracking-widest text-blue-600">Phase Correction</span>
-                    <div class="flex-1 h-px bg-gray-200"></div>
+                    <span id="wizard-label-1" class="text-[10px] font-black uppercase tracking-widest text-blue-600">Name</span>
+                    <div id="wizard-sep-1" class="flex-1 h-px bg-gray-200"></div>
                     <div id="wizard-badge-2" class="w-7 h-7 rounded-full flex items-center justify-center text-xs font-black bg-gray-200 text-gray-400">2</div>
-                    <span id="wizard-label-2" class="text-[10px] font-black uppercase tracking-widest text-gray-400">Baseline</span>
+                    <span id="wizard-label-2" class="text-[10px] font-black uppercase tracking-widest text-gray-400">Phase Correction</span>
                     <div class="flex-1 h-px bg-gray-200"></div>
                     <div id="wizard-badge-3" class="w-7 h-7 rounded-full flex items-center justify-center text-xs font-black bg-gray-200 text-gray-400">3</div>
-                    <span id="wizard-label-3" class="text-[10px] font-black uppercase tracking-widest text-gray-400">Peak Selection</span>
+                    <span id="wizard-label-3" class="text-[10px] font-black uppercase tracking-widest text-gray-400">Baseline</span>
+                    <div class="flex-1 h-px bg-gray-200"></div>
+                    <div id="wizard-badge-4" class="w-7 h-7 rounded-full flex items-center justify-center text-xs font-black bg-gray-200 text-gray-400">4</div>
+                    <span id="wizard-label-4" class="text-[10px] font-black uppercase tracking-widest text-gray-400">Peak Selection</span>
                 </div>
 
-                <!-- Step 1: Phase Correction and Apodization -->
+                <!-- Step 1: Analysis Name (analysis workflow only) -->
                 <div id="proc-step-1" class="bg-white rounded-3xl border border-gray-200 p-6 shadow-sm">
+                    <div class="mb-4">
+                        <h3 class="text-xl font-bold text-gray-800">Analysis Name</h3>
+                        <p class="text-xs text-gray-400 mt-1 max-w-xl">Give this analysis a name. It will be used as the filename when you download your results.</p>
+                    </div>
+                    <div class="mb-5">
+                        <label class="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">Name</label>
+                        <input id="analysis-name-input" type="text" class="w-full border border-gray-300 rounded-xl p-3 bg-white shadow-sm focus:ring-2 focus:ring-green-500 transition-all text-sm font-bold text-gray-800" placeholder="my_dataset_analysis">
+                    </div>
+                    <div class="flex justify-end">
+                        <button onclick="wizardGoToStep(2)" class="px-6 py-2.5 bg-blue-600 text-white text-[10px] font-black uppercase tracking-widest rounded-xl hover:bg-blue-700 shadow-sm transition-all">
+                            Next &rarr;
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Step 2: Phase Correction and Apodization -->
+                <div id="proc-step-2" class="bg-white rounded-3xl border border-gray-200 p-6 shadow-sm">
                     <div class="flex justify-between items-start mb-4">
                         <div>
                             <h3 class="text-xl font-bold text-gray-800">Phase Correction and Apodization</h3>
@@ -310,7 +336,7 @@
                         <button onclick="resetPhase()" class="text-[10px] font-bold text-gray-400 hover:text-gray-600 underline">Reset</button>
                         <div class="ml-auto flex items-center gap-3">
                             <button onclick="skipProcessing()" class="text-[10px] font-bold text-gray-400 hover:text-gray-600 underline">Skip (use magnitude)</button>
-                            <button onclick="wizardGoToStep(2)" class="px-6 py-2.5 bg-blue-600 text-white text-[10px] font-black uppercase tracking-widest rounded-xl hover:bg-blue-700 shadow-sm transition-all">
+                            <button onclick="wizardGoToStep(3)" class="px-6 py-2.5 bg-blue-600 text-white text-[10px] font-black uppercase tracking-widest rounded-xl hover:bg-blue-700 shadow-sm transition-all">
                                 Next: Baseline →
                             </button>
                         </div>
@@ -318,7 +344,7 @@
                 </div>
 
                 <!-- Step 2: Baseline Correction -->
-                <div id="proc-step-2" class="hidden bg-white rounded-3xl border border-gray-200 p-6 shadow-sm">
+                <div id="proc-step-3" class="hidden bg-white rounded-3xl border border-gray-200 p-6 shadow-sm">
                     <div class="mb-4">
                         <h3 class="text-xl font-bold text-gray-800">Baseline Correction</h3>
                         <p class="text-xs text-gray-400 mt-1 max-w-xl">Remove residual baseline drift from the phased spectrum. The baseline is auto-estimated from spectral regions below 5% of the peak maximum and subtracted.</p>
@@ -343,7 +369,7 @@
                             </div>
                         </div>
                         <div class="ml-auto flex items-center gap-3">
-                            <button onclick="wizardGoToStep(1)" class="text-[10px] font-bold text-gray-400 hover:text-gray-600">← Back</button>
+                            <button id="wizard-back-phase" onclick="wizardGoToStep(2)" class="text-[10px] font-bold text-gray-400 hover:text-gray-600">← Back</button>
                             <button onclick="applyProcessingAndContinue()" id="btn-apply-processing"
                                 class="px-6 py-2.5 bg-green-600 text-white text-[10px] font-black uppercase tracking-widest rounded-xl hover:bg-green-700 shadow-sm transition-all">
                                 Apply &amp; Select Peaks →
@@ -579,6 +605,7 @@
         let lastAnalysisResult = null;
         let calibrations = [];
         let selectedCalibration = null;
+        let analysisName = '';  // Used for downloaded file naming
         let selectedPeaks = []; // Unified selection location
         let selectedCalibrationPeak = null; // Track clicked peak in calibration workflow
         let _calibPeakProcessing = false; // Prevent double-click during analyze_peak fetch
@@ -628,14 +655,36 @@
             const noneRadio = document.querySelector('input[name="baseline-method"][value="-1"]');
             if (noneRadio) noneRadio.checked = true;
 
-            // Show wizard step 1 and reset badges
-            currentWizardStep = 1;
-            document.getElementById('proc-step-1').classList.remove('hidden');
-            document.getElementById('proc-step-2').classList.add('hidden');
+            // Calibration workflow starts at step 2 (Phase); analysis starts at step 1 (Name)
+            const startStep = (workflow === 'analysis') ? 1 : 2;
+
+            // Show/hide the Name step elements based on workflow
+            ['wizard-badge-1', 'wizard-label-1', 'wizard-sep-1'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.classList.toggle('hidden', workflow !== 'analysis');
+            });
+            // Show/hide Back button on Phase step
+            const _backPhase = document.getElementById('wizard-back-phase');
+            if (_backPhase) _backPhase.style.display = (workflow === 'analysis') ? '' : 'none';
+
+            // Hide all step panels, then show the start step
             [1, 2, 3].forEach(i => {
+                const p = document.getElementById(`proc-step-${i}`);
+                if (p) p.classList.add('hidden');
+            });
+            currentWizardStep = startStep;
+            const _startPanel = document.getElementById(`proc-step-${startStep}`);
+            if (_startPanel) _startPanel.classList.remove('hidden');
+
+            // Reset badges
+            [1, 2, 3, 4].forEach(i => {
                 const _b = document.getElementById(`wizard-badge-${i}`);
                 const _l = document.getElementById(`wizard-label-${i}`);
-                if (i === 1) {
+                if (!_b || !_l) return;
+                if (i < startStep) {
+                    _b.className = 'w-7 h-7 rounded-full flex items-center justify-center text-xs font-black bg-green-500 text-white';
+                    _l.className = 'text-[10px] font-black uppercase tracking-widest text-green-600';
+                } else if (i === startStep) {
                     _b.className = 'w-7 h-7 rounded-full flex items-center justify-center text-xs font-black bg-blue-600 text-white';
                     _l.className = 'text-[10px] font-black uppercase tracking-widest text-blue-600';
                 } else {
@@ -643,6 +692,13 @@
                     _l.className = 'text-[10px] font-black uppercase tracking-widest text-gray-400';
                 }
             });
+
+            // Pre-fill analysis name input
+            if (workflow === 'analysis') {
+                const _nameInp = document.getElementById('analysis-name-input');
+                if (_nameInp && analysisName) _nameInp.value = analysisName;
+            }
+
             // Reposition wizard so content above it doesn't shift its position:
             // calibration mode → place it inside section-calibration just before calib-workspace
             // analysis mode → place it before analysis-workspace (original position)
@@ -662,8 +718,8 @@
             Plotly.purge('plot-phase-preview');
             Plotly.purge('plot-baseline-preview');
 
-            // Initial preview (magnitude-equivalent at ph0=0)
-            updatePhasePreview();
+            // For calibration (starts at Phase step) or when skipping Name step: initialize phase preview
+            if (startStep === 2) updatePhasePreview();
         }
 
         function wizardGoToStep(step) {
@@ -674,9 +730,10 @@
             if (_wNext) _wNext.classList.remove('hidden');
 
             // Update step indicator badges
-            [1, 2, 3].forEach(i => {
+            [1, 2, 3, 4].forEach(i => {
                 const badge = document.getElementById(`wizard-badge-${i}`);
                 const label = document.getElementById(`wizard-label-${i}`);
+                if (!badge || !label) return;
                 if (i < step) {
                     badge.className = 'w-7 h-7 rounded-full flex items-center justify-center text-xs font-black bg-green-500 text-white';
                     label.className = 'text-[10px] font-black uppercase tracking-widest text-green-600';
@@ -690,7 +747,12 @@
             });
 
             if (step === 2) {
-                // Immediately render phased spectrum (no freeze)
+                // Moving to Phase Correction — initialize phase preview
+                updatePhasePreview();
+            }
+
+            if (step === 3) {
+                // Moving to Baseline — immediately render phased spectrum
                 const _ph0 = parseFloat(document.getElementById('ph0-slider').value);
                 const _ph1 = parseFloat(document.getElementById('ph1-slider').value);
                 const _pv  = document.getElementById('pivot-ppm').value;
@@ -757,7 +819,7 @@
             const lb = parseFloat(document.getElementById('lb-slider').value);
             document.getElementById('lb-value').textContent = lb.toFixed(1);
             updatePhasePreview();
-            if (document.getElementById('proc-step-2') && !document.getElementById('proc-step-2').classList.contains('hidden')) {
+            if (document.getElementById('proc-step-3') && !document.getElementById('proc-step-3').classList.contains('hidden')) {
                 updateBaselinePreview();
             }
         }
@@ -773,7 +835,7 @@
             const fftSelect = document.getElementById('fft-points-select');
             const selected = fftSelect.value;
             updatePhasePreview();
-            if (document.getElementById('proc-step-2') && !document.getElementById('proc-step-2').classList.contains('hidden')) {
+            if (document.getElementById('proc-step-3') && !document.getElementById('proc-step-3').classList.contains('hidden')) {
                 updateBaselinePreview();
             }
         }
@@ -1113,7 +1175,7 @@
         }
 
         function proceedAfterProcessing() {
-            wizardGoToStep(3);  // marks step 3 active, keeps progress bar visible
+            wizardGoToStep(4);  // marks step 4 active, keeps progress bar visible
             if (currentWorkflow === 'calibration') {
                 document.getElementById('calib-workspace').classList.remove('hidden');
                 renderSelectionPlot('plot-selection', currentNmrData, handleCalibrationPeakClick);
@@ -1154,7 +1216,14 @@
         }
 
         function resetAnalysisUpload() {
-            document.getElementById('analysis-upload-area').classList.remove('hidden');
+            // Show upload or locked based on whether calibration is selected
+            if (selectedCalibration) {
+                document.getElementById('analysis-upload-area').classList.remove('hidden');
+                document.getElementById('analysis-upload-locked').classList.add('hidden');
+            } else {
+                document.getElementById('analysis-upload-area').classList.add('hidden');
+                document.getElementById('analysis-upload-locked').classList.remove('hidden');
+            }
             document.getElementById('analysis-verification-area').classList.add('hidden');
             document.getElementById('processing-wizard').classList.add('hidden');
             document.getElementById('analysis-workspace').classList.add('hidden');
@@ -1168,6 +1237,9 @@
             currentNmrData = null;
             selectedPeaks = [];
             updatePeakChips();
+            analysisName = '';
+            const _nameInp = document.getElementById('analysis-name-input');
+            if (_nameInp) _nameInp.value = '';
         }
 
         function loadCalibrations(vendorFilter) {
@@ -1250,8 +1322,20 @@
                     </div>
                 `;
                 summary.classList.remove('hidden');
+                // Unlock upload area if not already showing uploaded data
+                const _vArea2 = document.getElementById('analysis-verification-area');
+                if (_vArea2 && _vArea2.classList.contains('hidden')) {
+                    document.getElementById('analysis-upload-locked').classList.add('hidden');
+                    document.getElementById('analysis-upload-area').classList.remove('hidden');
+                }
             } else {
                 summary.classList.add('hidden');
+                // Re-lock upload area if no data has been uploaded yet
+                const _vArea = document.getElementById('analysis-verification-area');
+                if (_vArea && _vArea.classList.contains('hidden')) {
+                    document.getElementById('analysis-upload-area').classList.add('hidden');
+                    document.getElementById('analysis-upload-locked').classList.remove('hidden');
+                }
             }
         });
 
@@ -1328,6 +1412,10 @@
                         document.getElementById('analysis-verification-area').classList.remove('hidden');
                         renderStackedPlot('plot-stacked-sample', data.plot_data.stacked_data);
                         initializeFFTPointsDropdown(currentNmrData);
+                        // Set analysis name from uploaded filename
+                        analysisName = file.name.replace(/\.zip$/i, '').replace(/\.fid$/i, '') + '_analysis';
+                        const _nameInp = document.getElementById('analysis-name-input');
+                        if (_nameInp) _nameInp.value = analysisName;
                         showProcessingWizard('analysis');
                         // Auto-filter calibrations to match this dataset's vendor
                         const uploadedVendor = data.plot_data?.exp_params?.vendor || null;
@@ -1377,7 +1465,7 @@
                 plot_bgcolor: 'rgba(0,0,0,0)',
                 autosize: true
             };
-            const config = { responsive: true, displayModeBar: false };
+            const config = { responsive: true, displayModeBar: false, staticPlot: true };
             Plotly.newPlot(divId, stackedData, layout, config);
         }
 
@@ -2068,7 +2156,8 @@
                 const url = window.URL.createObjectURL(blob);
                 const a = document.createElement('a');
                 a.href = url;
-                a.download = blob.name || 'nmr_diffusion_analysis.zip';
+                const _dlName = (document.getElementById('analysis-name-input')?.value?.trim() || analysisName || 'nmr_diffusion_analysis');
+                a.download = _dlName + '.zip';
                 document.body.appendChild(a);
                 a.click();
                 window.URL.revokeObjectURL(url);
