@@ -713,8 +713,9 @@ def _build_readme(results, params, calibration, vendor, pulse_program,
                   delta, big_delta, ph0, ph1, baseline_order,
                   peaks_ppm, method, detected_standard, calibration_name, lb=1.0, fft_points=None,
                   sequence_type='PGSE', gradient_shape='square', gradient_shape_factor=1.0,
-                  tau_bipolar=0.0):
+                  tau_bipolar=0.0, exp_params_full=None):
     """Build a publication-ready README.txt string."""
+    ep = exp_params_full or {}
     lines = []
     w = lines.append
 
@@ -729,6 +730,29 @@ def _build_readme(results, params, calibration, vendor, pulse_program,
     w("1. EXPERIMENTAL PARAMETERS")
     w("-" * 78)
     w(f"  Vendor / Format:        {vendor.upper()}")
+
+    sfo1 = ep.get('sfo1_mhz')
+    if sfo1:
+        freq_mhz = round(float(sfo1))
+        w(f"  ¹H Frequency:           {freq_mhz} MHz  ({float(sfo1):.4f} MHz exact)")
+    else:
+        w(f"  ¹H Frequency:           N/A")
+
+    sw_hz = ep.get('sw_hz')
+    sw_ppm = ep.get('sw_ppm')
+    if sw_hz and sw_ppm:
+        w(f"  Spectral width:         {sw_hz/1000:.2f} kHz  ({sw_ppm:.2f} ppm)")
+    elif sw_hz:
+        w(f"  Spectral width:         {sw_hz/1000:.2f} kHz")
+
+    n_scans = ep.get('n_scans')
+    if n_scans:
+        w(f"  Scans per step:         {n_scans}")
+
+    recycle = ep.get('recycle_delay')
+    if recycle:
+        w(f"  Recycle delay (d1):     {float(recycle):.3f} s")
+
     w(f"  Pulse Program:          {pulse_program}")
     w(f"  Sequence Type:          {sequence_type} (Pulsed Gradient {'Spin Echo' if sequence_type == 'PGSE' else 'Stimulated Echo'})")
     w(f"  Gradient Shape:         {gradient_shape.capitalize()}")
@@ -739,7 +763,6 @@ def _build_readme(results, params, calibration, vendor, pulse_program,
     if tau_bipolar > 0:
         w(f"  τ (inter-bipolar delay): {tau_bipolar:.6f} s  ({tau_bipolar*1e3:.3f} ms)")
     w(f"  Number of gradient steps: {len(results[0]['intensities']) if results else 'N/A'}")
-    w(f"  Detected standard:      {detected_standard if detected_standard else 'N/A'}")
     w("")
 
     # ── 2. Calibration ──
@@ -764,11 +787,12 @@ def _build_readme(results, params, calibration, vendor, pulse_program,
     
     # Calculate zero-fill factor for README
     n_collected = params.get('n_collected', 0) if params else 0
-    if fft_points and n_collected:
-        zerofill_factor = fft_points / n_collected
-        zerofill_text = f"{zerofill_factor:.1f}×"
+    if fft_points:
+        zerofill_text = f"{fft_points:,} points"
+    elif n_collected:
+        zerofill_text = f"{n_collected:,} points"
     else:
-        zerofill_text = "4×"
+        zerofill_text = "N/A"
     
     w(f"  Apodization:            Exponential (lb = {lb:.1f} Hz)")
     w(f"  Zero-filling:           {zerofill_text}")
@@ -783,10 +807,10 @@ def _build_readme(results, params, calibration, vendor, pulse_program,
         w(f"  Diffusion equation:     PGSE: X = (γ·g·δ)² · (Δ - δ/3)")
     
     if gradient_shape == 'sinusoidal':
-        w(f"  Gradient shape:         Sinusoidal (shaped gradients)")
+        w(f"  Gradient shape:         Sinusoidal")
         w(f"  Gradient correction:    Applied correction factor {gradient_shape_factor:.4f}")
     else:
-        w(f"  Gradient shape:         Square (hard gradients)")
+        w(f"  Gradient shape:         Square")
     
     w(f"  Intensity extraction:   {method}")
     w(f"  Selected peaks:         {', '.join(f'{p:.3f} ppm' for p in peaks_ppm)}")
@@ -821,18 +845,13 @@ def _build_readme(results, params, calibration, vendor, pulse_program,
     # ── 5. Gradient Table ──
     w("5. GRADIENT TABLE")
     w("-" * 78)
-    w(f"  {'Slice':<8} {'DAC (%)':<12} {'G (G/cm)':<14} {'ST factor':<18}")
-    w(f"  {'-'*6:<8} {'-'*10:<12} {'-'*12:<14} {'-'*16:<18}")
+    w(f"  {'Slice':<8} {'DAC (%)':<12} {'G (G/cm)':<14}")
+    w(f"  {'-'*6:<8} {'-'*10:<12} {'-'*12:<14}")
 
     if results and results[0].get('gradients'):
         grads = results[0]['gradients']
-        st_x_vals = []
-        for g in grads:
-            g_t = g * 0.01
-            st = (gamma_const * g_t * delta)**2 * (big_delta - delta/3.0 - tau_bipolar/2.0)
-            st_x_vals.append(st)
-        for i, (g, st) in enumerate(zip(grads, st_x_vals)):
-            w(f"  {i+1:<8} {g:<12.4f} {g:<14.4f} {st:<18.3e}")
+        for i, g in enumerate(grads):
+            w(f"  {i+1:<8} {g:<12.4f} {g:<14.4f}")
     w("")
 
     # ── 6. Notes ──
@@ -846,7 +865,6 @@ def _build_readme(results, params, calibration, vendor, pulse_program,
         w("  - ST_X = (γ·g·δ)²·(Δ - δ/3)  where γ = 2.67522×10⁸ rad/s/T (¹H gyromagnetic ratio)")
     w("  - Intensities are normalized to I₀ (first slice, lowest gradient).")
     w("  - Points below 0.5% of I₀ are excluded from the fit (noise floor).")
-    w("  - For publication, report mean D ± SD with the number of peaks used.")
     w("")
     w("=" * 78)
     w("  End of report.")
@@ -857,133 +875,148 @@ def _build_readme(results, params, calibration, vendor, pulse_program,
 
 def _build_publication_info(results, params, calibration, vendor, pulse_program,
                             delta, big_delta, ph0, ph1, baseline_order,
-                            peaks_ppm, method, detected_standard, calibration_name):
-    """Build a publication-ready paragraph for peer-reviewed journals.
-    
-    The user can copy-paste this directly into the Methods / Experimental section
-    of a manuscript.  Placeholders in [brackets] should be filled in by the user
-    (e.g., spectrometer model, probe, temperature, sample ID).
-    """
+                            peaks_ppm, method, detected_standard, calibration_name,
+                            lb=1.0, fft_points=None, exp_params_full=None):
+    """Build a publication-ready Methods blurb with all available parameters filled in."""
     if not results:
         return "No analysis results available."
+
+    ep = exp_params_full or {}
 
     d_values = [r['d_value'] for r in results]
     mean_d = sum(d_values) / len(d_values)
     n_peaks = len(d_values)
     if n_peaks > 1:
         std_d = (sum((d - mean_d)**2 for d in d_values) / (n_peaks - 1))**0.5
-        se_d = std_d / (n_peaks**0.5)
     else:
         std_d = 0.0
-        se_d = 0.0
-
-    # Average R²
     avg_r2 = sum(r['r_squared'] for r in results) / len(results)
 
-    # Average error %
-    avg_err = sum(r['error_pct'] for r in results) / len(results) * 100
-
-    # Gradient range
+    # Gradient info
     grads = results[0].get('gradients', [])
-    g_min = min(grads) if grads else 0
-    g_max = max(grads) if grads else 0
+    g_min = min(grads) if grads else 0.0
+    g_max = max(grads) if grads else 0.0
+    n_steps = len(grads) if grads else 0
 
-    # Intensity extraction description
+    # Spectrometer / acquisition fields
+    sfo1 = ep.get('sfo1_mhz')
+    freq_str = f"{round(float(sfo1))} MHz" if sfo1 else "[frequency — check instrument]"
+    vendor_cap = vendor.capitalize() if vendor and vendor != 'unknown' else "[Bruker/Varian]"
+
+    sw_hz = ep.get('sw_hz')
+    sw_ppm = ep.get('sw_ppm')
+    if sw_hz and sw_ppm:
+        sw_str = f"{sw_hz/1000:.1f} kHz ({sw_ppm:.1f} ppm)"
+    elif sw_hz:
+        sw_str = f"{sw_hz/1000:.1f} kHz"
+    else:
+        sw_str = "[spectral width — check instrument]"
+
+    n_scans = ep.get('n_scans')
+    scans_str = str(int(n_scans)) if n_scans else "[N]"
+
+    recycle = ep.get('recycle_delay')
+    recycle_str = f"{float(recycle):.1f} s" if recycle else "[d1 — check instrument]"
+
+    # Processing
+    n_collected = params.get('n_collected', 0) if params else 0
+    if fft_points:
+        pts_str = f"{fft_points:,}"
+    elif n_collected:
+        pts_str = f"{n_collected:,}"
+    else:
+        pts_str = "[N]"
+
+    # Intensity method
     method_desc = {
-        'intensity': 'peak maximum intensity',
-        'intensity_max': 'peak maximum intensity',
+        'intensity':       'peak maximum intensity',
+        'intensity_max':   'peak maximum intensity',
         'intensity_exact': 'peak intensity at the exact chemical shift',
-        'area': 'peak integrated area',
-        'intensity_fit': 'fitted peak amplitude',
+        'area':            'peak integrated area',
+        'intensity_fit':   'fitted peak amplitude',
     }.get(method, method)
 
-    baseline_desc = f'polynomial baseline correction of order {baseline_order}' if baseline_order >= 0 else 'no baseline correction'
+    baseline_desc = (f"polynomial order {baseline_order} baseline correction"
+                     if baseline_order >= 0 else "no baseline correction")
 
-    # Gradient info
-    if grads:
-        grad_text = f" across {len(grads)} gradient steps ranging from {g_min:.4f} to {g_max:.4f} G/cm."
+    # Equation label
+    if sequence_type == 'PGSTE' and tau_bipolar > 0:
+        eq_label = "bipolar PGSTE Stejskal-Tanner equation"
+        b_factor = f"(γgδ)²(Δ − δ/3 − τ/2)"
+        tau_line = f"\nwhere τ = {tau_bipolar*1e3:.3f} ms is the inter-bipolar-gradient delay."
     else:
-        grad_text = " gradient steps."
+        eq_label = "Stejskal-Tanner equation"
+        b_factor = "(γgδ)²(Δ − δ/3)"
+        tau_line = ""
 
-    # Calibration info
+    # Calibration sentence
     if calibration and calibration.get('slope') is not None:
-        intercept_val = calibration.get('intercept', 0)
-        if intercept_val >= 0:
-            cal_text = f"+ {abs(intercept_val):.6f} G/cm"
-        else:
-            cal_text = f"- {abs(intercept_val):.6f} G/cm"
-        cal_line = f"The calibrated gradient equation is G(s) = {calibration['slope']:.6f}·s {cal_text}."
-    elif calibration:
-        cal_line = f"with slope {calibration['slope']:.6f} G/cm per DAC unit."
+        icept = calibration.get('intercept', 0)
+        sign = '+' if icept >= 0 else '-'
+        cal_sentence = (f"The gradient strength was calibrated using {calibration_name}: "
+                        f"G = {calibration['slope']:.5f}·s {sign} {abs(icept):.5f} G/cm "
+                        f"(max {calibration['max_g']:.2f} G/cm).")
     else:
-        cal_line = " (calibration not available)."
+        cal_sentence = "Gradient calibration was applied prior to analysis."
 
-    # Standard info
     if detected_standard:
-        std_line = f"Gradient calibration was performed using {detected_standard} with a literature diffusion coefficient."
+        std_sentence = f"The calibration standard was {detected_standard}."
     else:
-        std_line = "Gradient calibration was performed using a known standard."
+        std_sentence = ""
 
-    # Peak info
-    if len(peaks_ppm) > 1:
-        peak_text = f" at {', '.join(f'{p:.3f} ppm' for p in peaks_ppm)}"
-    elif peaks_ppm:
-        peak_text = f" ({peaks_ppm[0]:.3f} ppm)"
+    # Peak list
+    if peaks_ppm:
+        peak_list = ", ".join(f"{p:.3f} ppm" for p in peaks_ppm)
+        peak_sentence = f"Peaks at {peak_list} were selected for fitting."
     else:
-        peak_text = ""
+        peak_sentence = ""
 
-    # Build the paragraph
+    # Build blurb
     lines = []
     w = lines.append
 
-    w("DIFFUSION COEFFICIENT MEASUREMENTS")
+    w("METHODS — COPY & PASTE TEMPLATE")
     w("=" * 78)
+    w("(Items in [brackets] were not available from the data file and should")
+    w(" be filled in manually before submission.)")
     w("")
-    w("Diffusion coefficients were determined by pulsed-field gradient")
-    w("nuclear magnetic resonance (PFG-NMR) using the [insert pulse sequence,")
-    w(f"e.g., BPPG-STE / LED / stebpgp1s] pulse program on a [insert")
-    w("spectrometer manufacturer and model] NMR spectrometer operating at a")
-    w("[insert Larmor frequency] MHz ¹H frequency, equipped with a")
-    w("[insert probe type] probe. The experiment was performed at a")
-    w("[insert temperature] °C on [insert sample description / ID].")
+    w(f"Diffusion coefficients were measured by pulsed-field gradient NMR")
+    w(f"(PFG-NMR) on a {vendor_cap} {freq_str} spectrometer using the")
+    w(f"{pulse_program} pulse sequence "
+      f"({'bipolar PGSTE' if sequence_type=='PGSTE' and tau_bipolar>0 else sequence_type}). "
+      f"Experiments were performed at [temperature] °C on [sample description].")
     w("")
-    max_g_val = calibration['max_g'] if calibration else g_max
-    w(f"The diffusion time (Delta) was {big_delta*1e3:.2f} ms and the gradient")
-    w(f"pulse duration (gamma) was {delta*1e6:.2f} microseconds, yielding a maximum")
-    w(f"gradient strength of {max_g_val:.2f} G/cm{grad_text}")
+    w(f"{n_steps} gradient steps were applied ranging from {g_min:.2f} to {g_max:.2f} G/cm,")
+    w(f"with gradient pulse duration δ = {delta*1e6:.2f} μs and diffusion delay")
+    w(f"Δ = {big_delta*1e3:.2f} ms{f', inter-bipolar delay τ = {tau_bipolar*1e3:.3f} ms' if tau_bipolar > 0 else ''}.")
+    w(f"Each step was signal-averaged over {scans_str} scans with a {recycle_str} recycle delay.")
+    w(f"Spectra were acquired with a spectral width of {sw_str}.")
+    w(cal_sentence)
+    if std_sentence:
+        w(std_sentence)
     w("")
-    w(std_line)
-    w(cal_line)
+    w(f"Raw FIDs were apodized with an exponential window (lb = {lb:.1f} Hz),")
+    w(f"Fourier-transformed to {pts_str} points, and phase-corrected")
+    w(f"(ph0 = {ph0:.1f}°, ph1 = {ph1:.1f}°) with {baseline_desc}.")
+    w(f"{peak_sentence}")
+    w(f"The {method_desc} was extracted at each gradient step and fitted to")
+    w(f"the {eq_label}:")
+    w(f"")
+    w(f"    I(g) = I₀ · exp(−D · {b_factor}){tau_line}")
+    w(f"")
+    w(f"where γ = 2.67522 × 10⁸ rad s⁻¹ T⁻¹ is the ¹H gyromagnetic ratio.")
+    w(f"Intensities were normalized to I₀ (lowest-gradient slice).")
     w("")
-    # Calculate zero-fill factor for README
-    n_collected = params.get('n_collected', 0) if params else 0
-    if fft_points and n_collected:
-        zerofill_factor = fft_points / n_collected
-        zerofill_text = f"{zerofill_factor:.1f}×"
-    else:
-        zerofill_text = "4×"
-    
-    w(f"Raw time-domain data were apodized with an exponential window")
-    w(f"(line broadening = {lb:.1f} Hz), zero-filled {zerofill_text}, and Fourier")
-    w("transformed. Phase correction was applied (ph0 = "
-    f"{ph0:.1f} degrees, ph1 = {ph1:.1f} degrees) with {baseline_desc}.")
+    w(f"RESULTS SUMMARY")
+    w("-" * 78)
+    w(f"  Peaks analysed:   {n_peaks}  ({', '.join(f'{p:.3f} ppm' for p in peaks_ppm)})")
+    w(f"  Mean D:           {mean_d:.3e} ± {std_d:.3e} m²/s  (mean ± SD)")
+    w(f"  Mean R²:          {avg_r2:.4f}")
+    for r in results:
+        w(f"    {r['ppm']:.3f} ppm:  D = {r['d_value']:.3e} m²/s,  R² = {r['r_squared']:.4f},  err = {r['error_pct']:.1f}%")
     w("")
-    w(f"Diffusion coefficients were extracted from the attenuation of the")
-    w(f"{method_desc}{peak_text} following the Stejskal-Tanner relation:")
-    w("I(g) = I0 x exp(-D x (gamma_gyromag x g x delta)^2 x (Delta - delta/3)),")
-    w("where gamma_gyromag = 2.67522 x 10^8 rad s^-1 T^-1 is the 1H gyromagnetic ratio,")
-    w("g is the gradient strength, and I(g) and I0 are the peak intensities")
-    w("at gradient g and g = 0, respectively. A linear least-squares fit")
-    w("of ln(I/I0) versus the Stejskal-Tanner encoding factor")
-    w("((gamma_gyromag x g x delta)^2 x (Delta - delta/3)) yielded the diffusion coefficient D.")
-    w("")
-    w(f"The mean diffusion coefficient from {n_peaks} peak(s) is")
-    w(f"D = {mean_d:.3e} +/- {std_d:.3e} m^2/s (mean +/- SD)")
-    w(f"(SE = {se_d:.3e} m^2/s) with an average fit quality of")
-    w(f"R^2 = {avg_r2:.4f} and mean relative error of {avg_err:.1f}%.")
-    w("")
-    w("Data availability: All raw spectra, gradient tables, and individual")
-    w("peak diffusion data are provided in the accompanying download package.")
+    w("NOTE: Fill in [temperature], [sample description], and probe type")
+    w("before using in a manuscript.")
     w("")
 
     return "\n".join(lines)
@@ -1024,27 +1057,28 @@ def download_analysis():
         if not results:
             return jsonify({'error': 'No results to download.'}), 400
 
+        # Inject n_collected into params so _build_readme can use it
+        if params is None:
+            params = {}
+        params['n_collected'] = int(data.get('n_collected', 0))
+        exp_params_full = data.get('exp_params', {}) or {}
+
         # ── Build README ──
         readme_text = _build_readme(
             results, params, calibration, vendor, pulse_program,
             delta, big_delta, ph0, ph1, baseline_order,
             peaks_ppm, method, detected_standard, calibration_name, lb, fft_points,
             sequence_type, gradient_shape, gradient_shape_factor,
-            tau_bipolar
+            tau_bipolar, exp_params_full
         )
 
-        # Optional publication/context metadata bundled with downloads.
-        pub_info_text = "\n".join([
-            "NMR Diffusion Analysis Export",
-            "",
-            f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-            f"Vendor: {vendor}",
-            f"Pulse Program: {pulse_program}",
-            f"Calibration: {calibration_name}",
-            "",
-            "This file is included as a placeholder for publication metadata,",
-            "instrument notes, and citation details.",
-        ])
+        # ── Build publication Methods blurb ──
+        pub_info_text = _build_publication_info(
+            results, params, calibration, vendor, pulse_program,
+            delta, big_delta, ph0, ph1, baseline_order,
+            peaks_ppm, method, detected_standard, calibration_name,
+            lb, fft_points, exp_params_full
+        )
 
         # ── Build CSV data for each peak ──
         csv_parts = []
@@ -1158,46 +1192,6 @@ def download_analysis():
         plt.close(fig)
         buf.seek(0)
         plot_images['decay_fit_ui_matched.png'] = buf.getvalue()
-
-        # ── Plot 2: Semi-log linearization (ln(I/I0) vs ST encoding factor) ──
-        fig, ax = plt.subplots(figsize=(8, 5.5), dpi=150)
-        for idx, r in enumerate(results):
-            color = colors[idx % len(colors)]
-            gradients_gcm = np.array(r.get('gradients', []), dtype=float)
-            intensities = np.array(r.get('intensities', []), dtype=float)
-            if len(gradients_gcm) == 0 or len(intensities) == 0:
-                continue
-
-            # 1 G/cm = 0.01 T/m
-            g_tm = gradients_gcm * 0.01
-            st_x = (gamma_const * g_tm * delta) ** 2 * (big_delta - delta / 3.0 - tau_bipolar / 2.0)
-
-            mask = np.isfinite(st_x) & np.isfinite(intensities) & (intensities > 0)
-            if np.sum(mask) < 2:
-                continue
-
-            x_use = st_x[mask]
-            y_use = np.log(intensities[mask])
-            ax.scatter(x_use, y_use, s=20, color=color, alpha=0.9,
-                       label=f"{float(r['ppm']):.3f} ppm", zorder=3)
-
-            # Draw a linear trend in ST-space for visual verification.
-            m_fit, b_fit = np.polyfit(x_use, y_use, 1)
-            x_line = np.linspace(float(np.min(x_use)), float(np.max(x_use)), 200)
-            y_line = m_fit * x_line + b_fit
-            ax.plot(x_line, y_line, color=color, linewidth=1.8, alpha=0.85, zorder=2)
-
-        ax.set_xlabel('Stejskal-Tanner Encoding Factor', fontsize=11, fontweight='bold')
-        ax.set_ylabel('ln(I/I0)', fontsize=11, fontweight='bold')
-        ax.set_title('Semi-log Decay Linearization', fontsize=12, fontweight='bold', pad=10)
-        ax.grid(True, alpha=0.3)
-        ax.legend(fontsize=8, loc='best', framealpha=0.9)
-        ax.tick_params(axis='both', which='major', labelsize=9)
-        plt.tight_layout()
-        buf = Bio()
-        fig.savefig(buf, format='png', bbox_inches='tight')
-        plt.close(fig)
-        plot_images['semi_log_st_linearization.png'] = buf.getvalue()
 
         # ── Plot 3: Angled stacked spectra (processed/phased data) ──
         if ppm_array and raw_spectra:
@@ -1857,6 +1851,29 @@ def process_nmr_data(extract_dir, lb=1.0, fft_points=None):
                 val_d16 = get_bruker_item(dic, acqus_path, 'D', 16)
                 if val_d16 is not None:
                     params['tau_bipolar'] = val_d16
+
+                # ── Additional spectrometer/acquisition parameters ──
+                acqus_d = dic.get('acqus', {})
+                try:
+                    sfo1 = float(acqus_d.get('SFO1', 0) or 0)
+                    if sfo1 > 0:
+                        params['sfo1_mhz'] = sfo1  # exact MHz (e.g. 400.1324)
+                        sw_p = float(acqus_d.get('SW', 0) or 0)
+                        if sw_p > 0:
+                            params['sw_ppm'] = sw_p
+                            params['sw_hz'] = sw_p * sfo1
+                except Exception:
+                    pass
+                try:
+                    ns = int(acqus_d.get('NS', 0) or 0)
+                    if ns > 0:
+                        params['n_scans'] = ns
+                except Exception:
+                    pass
+                val_d1 = get_bruker_item(dic, acqus_path, 'D', 1)
+                if val_d1 is not None and val_d1 > 0:
+                    params['recycle_delay'] = val_d1
+
                 print(f"[Bruker param extraction] delta={params.get('delta')} big_delta={params.get('big_delta')} tau={params.get('tau_bipolar')} P30={val_p30} D20={val_d20} D16={val_d16}")
             # Check for difflist
             difflist_path = os.path.join(data_path, 'difflist')
@@ -2004,10 +2021,27 @@ def process_nmr_data(extract_dir, lb=1.0, fft_points=None):
         tof_v  = get_pp('tof',  default=0.0)    # Hz — transmitter offset from carrier
         if sfrq_v:
             params['sfrq'] = sfrq_v
+            params['sfo1_mhz'] = sfrq_v
         if sw_v:
             params['sw'] = sw_v
+            params['sw_hz'] = sw_v
+            if sfrq_v:
+                params['sw_ppm'] = sw_v / sfrq_v
         if tof_v:
             params['tof'] = tof_v
+
+        # nt — number of transients per gradient step
+        nt_v = get_pp('nt', default=None)
+        if nt_v is not None:
+            try:
+                params['n_scans'] = int(nt_v)
+            except Exception:
+                pass
+
+        # d1 — recycle delay (s)
+        d1_v = get_pp('d1', default=None)
+        if d1_v is not None:
+            params['recycle_delay'] = d1_v
 
         # Align number of FID slices with gradient array length
         if gzlvl1 and len(data.shape) == 2 and data.shape[0] != len(gzlvl1):

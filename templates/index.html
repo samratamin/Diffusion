@@ -858,25 +858,37 @@
             document.getElementById('collected-points').textContent =
                 collectedPoints ? collectedPoints.toLocaleString() : '—';
 
-            // Build options: 1x, 2x, 4x, 8x relative to collected FID length
-            const multipliers = [
-                { mult: 1, label: '1× (no zero-fill)' },
-                { mult: 2, label: '2× zero-fill' },
-                { mult: 4, label: '4× zero-fill' },
-                { mult: 8, label: '8× zero-fill' },
-            ];
-
+            // Build options: collected points (None), then binary powers-of-2 up to 256K
             while (fftSelect.options.length > 1) fftSelect.remove(1);
 
-            multipliers.forEach(({ mult, label }) => {
-                const pts = collectedPoints ? collectedPoints * mult : null;
-                const opt = document.createElement('option');
-                opt.value = pts ? pts.toString() : `_mult_${mult}`;
-                opt.textContent = pts
-                    ? `${formatFFTPointsLabel(pts)} pts — ${label}`
-                    : label;
-                fftSelect.appendChild(opt);
-            });
+            if (collectedPoints) {
+                // First option: actual collected points — no zero-fill
+                const optNone = document.createElement('option');
+                optNone.value = collectedPoints.toString();
+                optNone.textContent = `${formatFFTPointsLabel(collectedPoints)} pts — None (no zero-fill)`;
+                fftSelect.appendChild(optNone);
+
+                // Find the first power of 2 strictly greater than collectedPoints
+                let nextPow2 = 1;
+                while (nextPow2 <= collectedPoints) nextPow2 <<= 1;
+
+                // Add powers of 2 up to 256K
+                const maxPts = 262144;
+                for (let pts = nextPow2; pts <= maxPts; pts <<= 1) {
+                    const opt = document.createElement('option');
+                    opt.value = pts.toString();
+                    opt.textContent = `${formatFFTPointsLabel(pts)} pts`;
+                    fftSelect.appendChild(opt);
+                }
+            } else {
+                // No collected points known; offer standard NMR powers of 2
+                [8192, 16384, 32768, 65536, 131072, 262144].forEach(pts => {
+                    const opt = document.createElement('option');
+                    opt.value = `_pts_${pts}`;
+                    opt.textContent = `${formatFFTPointsLabel(pts)} pts`;
+                    fftSelect.appendChild(opt);
+                });
+            }
 
             // Default to 1x (no zero-fill) for fast real-time sliders
             if (collectedPoints) {
@@ -2132,7 +2144,9 @@
                 baseline_order: parseInt(document.querySelector('input[name="baseline-method"]:checked')?.value || -1),
                 lb: parseFloat(document.getElementById('lb-slider')?.value || 1.0),
                 fft_points: getFFTPoints(),
-                vendor: currentNmrData?.vendor || 'unknown',
+                n_collected: currentNmrData?.exp_params?.n_collected || 0,
+                vendor: currentNmrData?.exp_params?.vendor || 'unknown',
+                exp_params: currentNmrData?.exp_params || {},
                 pulse_program: lastAnalysisResult.params?.pulse_program || 'unknown',
                 delta: lastAnalysisResult.params?.delta || 0,
                 big_delta: lastAnalysisResult.params?.big_delta || 0,
