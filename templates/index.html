@@ -235,6 +235,9 @@
                             <button onclick="resetAnalysisUpload()" class="mt-2 text-[10px] text-gray-400 hover:text-green-600 font-bold self-end pr-2 transition-colors">
                                 ↻ Upload Different Dataset
                             </button>
+                            <div id="analysis-calib-needed" class="hidden mt-3 p-3 bg-amber-50 border border-amber-200 rounded-xl text-[11px] text-amber-800 font-semibold text-center">
+                                ← Select a calibration profile on the left to continue
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -1221,6 +1224,7 @@
         function resetAnalysisUpload() {
             document.getElementById('analysis-upload-area').classList.remove('hidden');
             document.getElementById('analysis-verification-area').classList.add('hidden');
+            document.getElementById('analysis-calib-needed').classList.add('hidden');
             document.getElementById('processing-wizard').classList.add('hidden');
             document.getElementById('analysis-workspace').classList.add('hidden');
             document.getElementById('analysis-controls').classList.add('hidden');
@@ -1322,6 +1326,11 @@
                     </div>
                 `;
                 summary.classList.remove('hidden');
+                // If data already uploaded and wizard not yet shown, start it now
+                if (currentNmrData && document.getElementById('processing-wizard').classList.contains('hidden')) {
+                    document.getElementById('analysis-calib-needed').classList.add('hidden');
+                    showProcessingWizard('analysis');
+                }
             } else {
                 summary.classList.add('hidden');
             }
@@ -1404,10 +1413,15 @@
                         analysisName = file.name.replace(/\.zip$/i, '').replace(/\.fid$/i, '') + '_analysis';
                         const _nameInp = document.getElementById('analysis-name-input');
                         if (_nameInp) _nameInp.value = analysisName;
-                        showProcessingWizard('analysis');
                         // Auto-filter calibrations to match this dataset's vendor
                         const uploadedVendor = data.plot_data?.exp_params?.vendor || null;
                         if (uploadedVendor) filterCalibrationsByVendor(uploadedVendor);
+                        // Only start wizard if calibration is already selected; otherwise prompt
+                        if (selectedCalibration) {
+                            showProcessingWizard('analysis');
+                        } else {
+                            document.getElementById('analysis-calib-needed').classList.remove('hidden');
+                        }
                     }
                     
                 }
