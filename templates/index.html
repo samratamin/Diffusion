@@ -467,10 +467,6 @@
                         <div class="p-6 bg-white border border-gray-200 rounded-xl shadow-sm min-h-[300px]">
                             <div class="flex items-center justify-between mb-4">
                                 <h3 class="text-lg font-bold text-gray-800">Diffusion Results</h3>
-                                <button id="btn-download-analysis" onclick="downloadAnalysisData()" class="hidden px-5 py-2.5 bg-green-600 text-white text-[10px] font-black uppercase tracking-widest rounded-xl hover:bg-green-700 shadow-md transition-all active:scale-95 flex items-center gap-2">
-                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
-                                    Download All Data
-                                </button>
                             </div>
                             <div id="analysis-results-placeholder" class="flex flex-col items-center justify-center h-[200px] text-gray-400">
                                 <i class="fas fa-chart-line text-3xl mb-2"></i>
@@ -582,11 +578,27 @@
                     </div>
                 </div>
             </div>
-        </div>
-    </div>
 
-    <!-- My Data Analysis Tab -->
-    <div id="section-mydata" class="tab-content hidden">
+            <!-- Analysis Action Bar: shown after results are ready -->
+            <div id="analysis-action-bar" class="hidden flex flex-wrap gap-3 pt-5 mt-2 border-t border-gray-100">
+                <button id="btn-save-analysis" onclick="saveAnalysisWithFeedback()"
+                        class="flex items-center gap-2 px-5 py-2.5 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 shadow-md transition-all active:scale-95 text-sm">
+                    <i class="fas fa-bookmark mr-1"></i> Save Analysis
+                </button>
+                <button id="btn-download-analysis" onclick="downloadAnalysisData()"
+                        class="flex items-center gap-2 px-5 py-2.5 bg-green-600 text-white font-bold rounded-xl hover:bg-green-700 shadow-md transition-all active:scale-95 text-sm">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                    Download Data
+                </button>
+                <button onclick="resetAnalysisUpload()"
+                        class="flex items-center gap-2 px-5 py-2.5 bg-gray-100 text-gray-700 font-bold rounded-xl hover:bg-gray-200 shadow-sm transition-all active:scale-95 text-sm ml-auto">
+                    <i class="fas fa-redo mr-1"></i> Start New Analysis
+                </button>
+            </div>
+        </div>
+
+        <!-- My Data Analysis Tab -->
+        <div id="section-mydata" class="tab-content hidden">
         <div class="max-w-3xl mx-auto">
             <div class="flex items-center justify-between mb-6">
                 <div>
@@ -607,6 +619,7 @@
                 <p class="text-sm mt-1">Run a diffusion analysis and it will appear here automatically.</p>
             </div>
             <div id="history-list" class="space-y-4"></div>
+        </div>
         </div>
     </div>
 
@@ -771,6 +784,7 @@
             }
             _wiz.classList.remove('hidden');
             document.getElementById('analysis-workspace').classList.add('hidden');
+            document.getElementById('analysis-action-bar').classList.add('hidden');
             document.getElementById('calib-workspace').classList.add('hidden');
 
             // Purge plot divs so zoom/state from any previous dataset is fully cleared
@@ -1304,6 +1318,7 @@
             document.getElementById('processing-wizard').classList.add('hidden');
             document.getElementById('analysis-workspace').classList.add('hidden');
             document.getElementById('analysis-controls').classList.add('hidden');
+            document.getElementById('analysis-action-bar').classList.add('hidden');
             
             // Clear previous results/plots
             document.getElementById('analysis-results-placeholder').classList.remove('hidden');
@@ -2178,7 +2193,13 @@
             `).join('');
 
             // Show download button now that results are available
-            document.getElementById('btn-download-analysis').classList.remove('hidden');
+            document.getElementById('analysis-action-bar').classList.remove('hidden');
+            // Reset save button to default state for each new result
+            const _sb = document.getElementById('btn-save-analysis');
+            _sb.innerHTML = '<i class="fas fa-bookmark mr-1"></i> Save Analysis';
+            _sb.disabled = false;
+            _sb.classList.remove('bg-green-600', 'hover:bg-green-700');
+            _sb.classList.add('bg-blue-600', 'hover:bg-blue-700');
         }
 
         function downloadAnalysisData() {
@@ -2375,6 +2396,15 @@
         })();
 
         // ─── Session History ─────────────────────────────────────────────────
+
+        function saveAnalysisWithFeedback() {
+            saveAnalysisToSession(lastAnalysisResult);
+            const btn = document.getElementById('btn-save-analysis');
+            btn.innerHTML = '<i class="fas fa-check mr-1"></i> Saved!';
+            btn.disabled = true;
+            btn.classList.remove('bg-blue-600', 'hover:bg-blue-700');
+            btn.classList.add('bg-green-600', 'hover:bg-green-700');
+        }
 
         function saveAnalysisToSession(analysisData) {
             if (!currentDataId || !analysisData || !analysisData.results) return;
