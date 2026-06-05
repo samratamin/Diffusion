@@ -245,7 +245,6 @@
                         </div>
                     </div>
                 </div>
-            </div>
 
             <!-- Processing Wizard (Phase + Baseline — shown after sample upload, before peak selection) -->
             <div id="processing-wizard" class="hidden mt-6">
@@ -383,7 +382,7 @@
 
             <!-- Analysis Workspace (Hidden until upload) -->
             <div id="analysis-workspace" class="hidden space-y-8 mt-12">
-                <div class="p-8 bg-white border border-gray-200 rounded-3xl shadow-sm overflow-hidden">
+                <div id="peak-selection-panel" class="p-8 bg-white border border-gray-200 rounded-3xl shadow-sm overflow-hidden">
                     <div class="flex justify-between items-end mb-6">
                         <div>
                             <h3 class="text-2xl font-bold text-gray-800">Peak Selection</h3>
@@ -599,7 +598,7 @@
 
         <!-- My Data Analysis Tab -->
         <div id="section-mydata" class="tab-content hidden">
-        <div class="max-w-3xl mx-auto">
+        <div class="max-w-3xl mx-auto pt-6">
             <div class="flex items-center justify-between mb-6">
                 <div>
                     <h2 class="text-2xl font-bold text-gray-800">My Data Analysis</h2>
@@ -621,6 +620,7 @@
             <div id="history-list" class="space-y-4"></div>
         </div>
         </div>
+    </div>
     </div>
 
     <!-- Save Modal -->
@@ -1280,11 +1280,6 @@
         function switchTab(tab) {
             document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active', 'text-blue-600'));
             document.querySelectorAll('.tab-content').forEach(c => c.classList.add('hidden'));
-            // The processing wizard is moved by JS and may live outside .tab-content
-            if (tab === 'mydata') {
-                const wiz = document.getElementById('processing-wizard');
-                if (wiz) wiz.classList.add('hidden');
-            }
             document.getElementById('tab-' + tab).classList.add('active', 'text-blue-600');
             document.getElementById('section-' + tab).classList.remove('hidden');
 
@@ -1303,6 +1298,8 @@
             document.getElementById('processing-wizard').classList.add('hidden');
             document.getElementById('analysis-workspace').classList.add('hidden');
             document.getElementById('analysis-controls').classList.add('hidden');
+            const _psp = document.getElementById('peak-selection-panel');
+            if (_psp) _psp.classList.remove('hidden');
             document.getElementById('analysis-action-bar').classList.add('hidden');
             
             // Clear previous results/plots
@@ -1335,9 +1332,12 @@
 
         function _populateCalibPicker(data, vendor) {
             const filtered = vendor ? data.filter(c => (c.vendor || 'bruker') === vendor) : data;
+            // When vendor is specified but no matches found, fall back to showing all
+            const displayList = (vendor && filtered.length === 0) ? data : filtered;
+
             const picker = document.getElementById('calib-picker');
             picker.innerHTML = '<option value="">-- Load Saved Profile --</option>';
-            filtered.forEach(c => {
+            displayList.forEach(c => {
                 const opt = document.createElement('option');
                 opt.value = c.id;
                 const vendorLabel = (c.vendor && c.vendor !== 'bruker') ? ` [${c.vendor}]` : '';
@@ -1348,29 +1348,25 @@
             // Update filter indicator
             const note = document.getElementById('calib-vendor-filter-note');
             const noteText = document.getElementById('calib-vendor-filter-text');
-            if (vendor) {
+            if (vendor && filtered.length > 0) {
                 const vcap = vendor.charAt(0).toUpperCase() + vendor.slice(1);
                 noteText.textContent = `Showing ${vcap} calibrations only (${filtered.length} of ${data.length})`;
+                note.classList.remove('hidden');
+            } else if (vendor && filtered.length === 0) {
+                const vcap = vendor.charAt(0).toUpperCase() + vendor.slice(1);
+                noteText.textContent = `No ${vcap} calibrations found — showing all`;
                 note.classList.remove('hidden');
             } else {
                 note.classList.add('hidden');
             }
 
-            // Preserve selection if previously selected calibration is still in the filtered list
-            if (selectedCalibration && filtered.some(c => c.id == selectedCalibration.id)) {
-                picker.value = selectedCalibration.id;  // keep it
+            // Preserve selection if previously selected calibration is still in the display list
+            if (selectedCalibration && displayList.some(c => c.id == selectedCalibration.id)) {
+                picker.value = selectedCalibration.id;
             } else {
                 picker.value = '';
                 selectedCalibration = null;
                 document.getElementById('selected-calib-summary').classList.add('hidden');
-            }
-            if (vendor && filtered.length === 0) {
-                const note = document.getElementById('calib-vendor-filter-note');
-                document.getElementById('calib-vendor-filter-text').textContent =
-                    `No ${vendor.charAt(0).toUpperCase()+vendor.slice(1)} calibrations found — showing all`;
-                note.classList.remove('hidden');
-                // Show all as fallback so picker is not empty
-                _populateCalibPicker(data, null);
             }
         }
 
@@ -2078,6 +2074,10 @@
             if (!method) method = getSelectedMethod();
             document.getElementById('analysis-results-placeholder').classList.add('hidden');
             document.getElementById('analysis-plots-container').classList.remove('hidden');
+            // Normalize field names: backend uses 'ppm', saved summaries may use 'peak_ppm'
+            if (data && data.results) {
+                data.results.forEach(r => { if (r.peak_ppm !== undefined && r.ppm === undefined) r.ppm = r.peak_ppm; });
+            }
 
             // Update Parameter Banner
             document.getElementById('info-pulseprog').textContent = data.params.pulse_program.toUpperCase();
@@ -2168,9 +2168,9 @@
             tbody.innerHTML = data.results.map((res, idx) => `
                 <tr class="hover:bg-gray-50 transition-colors">
                     <td class="px-4 py-3 font-mono font-bold">${res.ppm.toFixed(3)}</td>
-                    <td class="px-4 py-3 font-mono text-gray-500">${res.r_squared.toFixed(4)}</td>
-                    <td class="px-4 py-3 font-mono font-bold" style="color: ${PEAK_COLORS[idx % PEAK_COLORS.length]}">${res.d_value.toExponential(3)}</td>
-                    <td class="px-4 py-3 text-right font-mono text-gray-400">${(res.error_pct * 100).toFixed(1)}%</td>
+                    <td class="px-4 py-3 font-mono text-gray-500">${res.r_squared != null ? res.r_squared.toFixed(4) : 'N/A'}</td>
+                    <td class="px-4 py-3 font-mono font-bold" style="color: ${PEAK_COLORS[idx % PEAK_COLORS.length]}">${res.d_value != null ? res.d_value.toExponential(3) : 'N/A'}</td>
+                    <td class="px-4 py-3 text-right font-mono text-gray-400">${res.error_pct != null ? (res.error_pct * 100).toFixed(1) + '%' : 'N/A'}</td>
                     <td class="px-4 py-3 text-right">
                         <button onclick="showVerification()" class="text-blue-600 hover:text-blue-800 font-bold text-[10px] uppercase tracking-wider">
                             <i class="fas fa-search-plus mr-1"></i> Verify Slices
@@ -2398,17 +2398,31 @@
         function saveAnalysisToSession(analysisData) {
             if (!currentDataId || !analysisData || !analysisData.results) return;
             const name = analysisName || (currentNmrData?.folder_name) || 'Dataset';
+            // Downsample spectrum to ≤2048 points for storage
+            let spectrum = null;
+            const rawPpm = currentNmrData?.raw_ppm || [];
+            const rawSpec = currentNmrData?.raw_spectra?.[0] || [];
+            if (rawPpm.length > 0 && rawSpec.length > 0) {
+                const step = Math.max(1, Math.ceil(rawPpm.length / 2048));
+                const spPpm = [], spInt = [];
+                for (let i = 0; i < rawPpm.length; i += step) { spPpm.push(rawPpm[i]); spInt.push(rawSpec[i]); }
+                const maxI = Math.max(...spInt) || 1;
+                spectrum = { ppm: spPpm, intensity: spInt.map(v => v / maxI) };
+            }
             const summary = {
                 results: analysisData.results.map(r => ({
-                    peak_ppm: r.peak_ppm,
+                    ppm: r.ppm,
                     d_value: r.d_value,
                     d_unit: r.d_unit,
                     r_squared: r.r_squared,
+                    error_pct: r.error_pct,
                     gradients: r.gradients,
                     intensities: r.intensities,
+                    fit_intensities: r.fit_intensities,
                     fit_line: r.fit_line
                 })),
-                params: analysisData.params
+                params: analysisData.params,
+                spectrum: spectrum
             };
             fetch('/session/save_analysis', {
                 method: 'POST',
@@ -2441,7 +2455,7 @@
                     }
                     _updateHistoryBadge(items.length);
                     const container = document.getElementById('history-list');
-                    container.innerHTML = '<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">' +
+                    container.innerHTML = '<div class="grid grid-cols-1 gap-3">' +
                         items.map((item, idx) => _renderHistoryTile(item, idx)).join('') +
                         '</div>';
                 })
@@ -2461,61 +2475,43 @@
         }
 
         function _renderHistoryTile(item, idx) {
-            const PEAK_COLORS = ['#1f77b4','#ff7f0e','#2ca02c','#d62728','#9467bd','#8c564b','#e377c2','#7f7f7f','#bcbd22','#17becf'];
             const d = new Date(item.created_at * 1000);
             const dateStr = d.toLocaleDateString(undefined, {month:'short', day:'numeric', year:'numeric'}) + ' · ' +
                             d.toLocaleTimeString(undefined, {hour:'2-digit', minute:'2-digit'});
-            const results = item.summary?.results || [];
-            const peakChips = results.map((r, i) => {
-                const col = PEAK_COLORS[i % PEAK_COLORS.length];
-                return `<span class="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-mono bg-gray-50 border border-gray-200">
-                    <span style="color:${col}" class="font-bold">${r.d_value ? r.d_value.toExponential(2) : '—'}</span>
-                    <span class="text-gray-400 text-[10px]">m²/s</span>
-                </span>`;
-            }).join('');
-            return `<div class="relative bg-white border border-gray-200 rounded-xl p-4 cursor-pointer hover:border-blue-300 hover:shadow-md transition-all group"
+            return `<div class="relative bg-white border border-gray-200 rounded-lg px-4 py-3 cursor-pointer hover:border-blue-300 hover:shadow-sm transition-all group flex items-center gap-3"
                          onclick="openAnalysisFromHistory(${idx})">
-                <button onclick="event.stopPropagation(); deleteHistoryItem('${item.data_id}')"
-                        title="Delete" class="absolute top-3 right-3 text-gray-300 hover:text-red-500 transition-colors">
-                    <i class="fas fa-trash-alt text-sm"></i>
-                </button>
-                <div class="font-bold text-gray-800 text-sm truncate pr-6 group-hover:text-blue-700 transition-colors">${_escHtml(item.dataset_name || 'Dataset')}</div>
-                <div class="text-xs text-gray-400 mt-0.5 mb-3">${dateStr}</div>
-                <div class="flex flex-wrap gap-1.5">${peakChips || '<span class="text-xs text-gray-400">No peaks</span>'}</div>
-                <div class="mt-3 text-xs font-semibold text-blue-500 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1">
-                    <i class="fas fa-arrow-right"></i> Open in Analysis
+                <div class="flex-1 min-w-0">
+                    <div class="font-semibold text-gray-800 text-sm truncate group-hover:text-blue-700 transition-colors">${_escHtml(item.dataset_name || 'Dataset')}</div>
+                    <div class="text-xs text-gray-400 mt-0.5">${dateStr}</div>
+                </div>
+                <div class="flex items-center gap-2 shrink-0">
+                    <span class="text-xs font-semibold text-blue-500 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1"><i class="fas fa-arrow-right"></i> Open</span>
+                    <button onclick="event.stopPropagation(); deleteHistoryItem('${item.data_id}')"
+                            title="Delete" class="text-gray-300 hover:text-red-500 transition-colors ml-1">
+                        <i class="fas fa-trash-alt text-sm"></i>
+                    </button>
                 </div>
             </div>`;
         }
 
-        function _escHtml(str) {
+                function _escHtml(str) {
             return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
         }
 
         function openAnalysisFromHistory(idx) {
             const item = _historyItems[idx];
             if (!item) return;
-            // Switch to analysis tab (hides mydata, hides processing wizard)
             switchTab('analysis');
-            // Hide upload/wizard areas, show workspace with just results
             document.getElementById('analysis-upload-area').classList.add('hidden');
             document.getElementById('analysis-verification-area').classList.add('hidden');
             document.getElementById('analysis-calib-needed').classList.add('hidden');
             document.getElementById('processing-wizard').classList.add('hidden');
             document.getElementById('analysis-workspace').classList.remove('hidden');
-            document.getElementById('analysis-controls').classList.add('hidden');
-            // Restore results into the analysis view
+            document.getElementById('analysis-controls').classList.remove('hidden');
             analysisName = item.dataset_name || '';
             lastAnalysisResult = item.summary;
-            currentDataId = null; // raw data not available for restored analyses
-            displayDiffusionResults(item.summary, 'intensity');
-            // Mark as already saved; hide Download (no raw data)
-            const saveBtn = document.getElementById('btn-save-analysis');
-            saveBtn.innerHTML = '<i class="fas fa-check mr-1"></i> Saved!';
-            saveBtn.disabled = true;
-            saveBtn.classList.remove('bg-blue-600', 'hover:bg-blue-700');
-            saveBtn.classList.add('bg-green-600', 'hover:bg-green-700');
-            document.getElementById('btn-download-analysis').classList.add('hidden');
+            currentDataId = item.data_id || null;
+
             // Show a subtle "restored from history" banner
             let banner = document.getElementById('restored-banner');
             if (!banner) {
@@ -2527,6 +2523,51 @@
                 ws.insertBefore(banner, ws.firstChild);
             }
             banner.classList.remove('hidden');
+
+            // Mark save button as already saved
+            const saveBtn = document.getElementById('btn-save-analysis');
+            saveBtn.innerHTML = '<i class="fas fa-check mr-1"></i> Saved!';
+            saveBtn.disabled = true;
+            saveBtn.classList.remove('bg-blue-600', 'hover:bg-blue-700');
+            saveBtn.classList.add('bg-green-600', 'hover:bg-green-700');
+            document.getElementById('analysis-action-bar').classList.remove('hidden');
+
+            // Re-process the original data from disk to restore full state (spectrum + download)
+            const dlBtn = document.getElementById('btn-download-analysis');
+            dlBtn.classList.add('hidden');
+            dlBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i> Restoring...';
+
+            fetch(`/api/restore_data/${item.data_id}`)
+                .then(r => r.json())
+                .then(data => {
+                    if (data.error) throw new Error(data.error);
+                    currentNmrData = data.plot_data;
+                    currentDataId = data.data_id;
+                    // Render the real spectrum with peak markers
+                    renderSelectionPlot('plot-selection-analysis-top', currentNmrData, handleAnalysisPeakClick);
+                    document.getElementById('peak-selection-panel').classList.remove('hidden');
+                    // Draw peak markers for saved peaks
+                    const PEAK_COLORS = ['#1f77b4','#ff7f0e','#2ca02c','#d62728','#9467bd','#8c564b','#e377c2','#7f7f7f','#bcbd22','#17becf'];
+                    const markerTraces = (item.summary.results || []).map((r, i) => ({
+                        x: [r.ppm], y: [1], yref: 'paper',
+                        mode: 'markers', marker: { color: PEAK_COLORS[i % PEAK_COLORS.length], size: 10, symbol: 'circle' },
+                        showlegend: false, hovertemplate: (r.ppm != null ? r.ppm.toFixed(3) : '?') + ' ppm<extra></extra>'
+                    }));
+                    if (markerTraces.length) Plotly.addTraces('plot-selection-analysis-top', markerTraces);
+                    // Enable download
+                    dlBtn.innerHTML = '<i class="fas fa-download mr-2"></i> Download Data';
+                    dlBtn.classList.remove('hidden');
+                })
+                .catch(err => {
+                    // Data gone from disk — fall back to saved spectrum thumbnail
+                    console.warn('Could not restore raw data:', err.message);
+                    document.getElementById('peak-selection-panel').classList.add('hidden');
+                    dlBtn.classList.add('hidden');
+                    dlBtn.innerHTML = '<i class="fas fa-download mr-2"></i> Download Data';
+                });
+
+            // Render saved results immediately (don't wait for re-process)
+            setTimeout(() => displayDiffusionResults(item.summary, 'intensity'), 50);
         }
 
         function deleteHistoryItem(dataId) {

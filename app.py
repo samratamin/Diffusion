@@ -693,7 +693,8 @@ def analyze_diffusion():
             # We map from G_min to G_max (physical gradient units)
             g_smooth = np.linspace(0, np.max(gradients), 500)
             g_tesla_m_smooth = g_smooth * 0.01
-            st_x_smooth = (gamma * g_tesla_m_smooth * delta)**2 * (big_delta - delta/3.0 - tau_bipolar/2.0)
+            # Apply gradient_shape_factor here to match the actual fit (which used g_effective = g_tesla_m * gradient_shape_factor)
+            st_x_smooth = (gamma * g_tesla_m_smooth * gradient_shape_factor * delta)**2 * (big_delta - delta/3.0 - tau_bipolar/2.0)
             
             fit_intensities_smooth = np.exp(slope * st_x_smooth + intercept)
             
@@ -2450,6 +2451,45 @@ def save_calibration():
         return jsonify({'error': str(e)}), 500
 
 # ─── Session History Endpoints ───────────────────────────────────────────────
+
+@app.route('/api/restore_data/<data_id>', methods=['GET'])
+def restore_data(data_id):
+    """Re-process uploaded NMR data from disk by data_id and return full plot_data."""
+    uuid_re = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.I)
+    if not uuid_re.match(data_id):
+        return jsonify({'error': 'Invalid data_id'}), 400
+
+    upload_dir = os.path.join(app.config['UPLOAD_FOLDER'], data_id)
+    if not os.path.isdir(upload_dir):
+        return jsonify({'error': 'Data not found — it may have been deleted after 3 days'}), 404
+
+    # Find the extract subdirectory (first non-zip entry)
+    extract_dir = None
+    for entry in os.scandir(upload_dir):
+        if entry.is_dir():
+            extract_dir = entry.path
+            break
+    if not extract_dir:
+        return jsonify({'error': 'Extracted data directory not found'}), 404
+
+    try:
+        plot_data = process_nmr_data(extract_dir)
+        _BROWSER_ONLY_KEYS = ('stacked_data', 'stacked_layout', 'selection_data')
+        store_entry = {k: v for k, v in plot_data.items() if k not in _BROWSER_ONLY_KEYS}
+        store_entry['raw_spectra'] = np.array(plot_data['raw_spectra'], dtype=np.float32)
+        _nmr_data_store[data_id] = store_entry
+        response_plot_data = {k: v for k, v in plot_data.items() if not k.startswith('_')}
+        if '_complex_spectra' in plot_data and plot_data['_complex_spectra']:
+            sp0 = plot_data['_complex_spectra'][0]
+            ppm_arr = np.array(plot_data.get('raw_ppm', []))
+            response_plot_data['complex_re_0'] = [float(v) for v in np.real(sp0)]
+            response_plot_data['complex_im_0'] = [float(v) for v in np.imag(sp0)]
+            response_plot_data['complex_ppm'] = ppm_arr.tolist()
+        return jsonify({'plot_data': response_plot_data, 'data_id': data_id})
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
 
 @app.route('/session/save_analysis', methods=['POST'])
 def save_session_analysis():
