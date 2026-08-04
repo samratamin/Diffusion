@@ -1908,26 +1908,61 @@ def process_nmr_data(extract_dir, lb=1.0, fft_points=None):
 
                 print(f"[Bruker param extraction] delta={params.get('delta')} big_delta={params.get('big_delta')} tau={params.get('tau_bipolar')} P30={val_p30} D20={val_d20} D16={val_d16}")
             # Check for difflist
+            # Bruker difflist usually contains instrument-calibrated G/cm values
+            # for each gradient step.  These are exactly what the calibration
+            # step is supposed to determine, so we keep them around for
+            # comparison/validation only (see display in the gradient table).
             difflist_path = os.path.join(data_path, 'difflist')
             if os.path.exists(difflist_path):
                 with open(difflist_path, 'r') as f:
                     difflist = [float(line.strip()) for line in f if line.strip()]
-            
-            # Check for difframp in lists/gp/
+
+            # Check for difframp in lists/gp/ (the ramp profile file).  This
+            # gives the actual fraction-of-max setting used for each gradient
+            # step and is the authoritative source for calibration.  Typical
+            # Bruker stebpgp1s files contain values like 0.05–0.95 (not 0–1).
             difframp_path = os.path.join(data_path, 'lists', 'gp', 'difframp')
             if os.path.exists(difframp_path):
                 with open(difframp_path, 'r') as f:
                     lines = f.readlines()
+                # Only honour data blocks that are simple Y values
+                # (##XYDATA= (X++(Y..Y))  Bruker JCAMP-DX format).  Skip
+                # unrelated $SHAPE_* blocks (which contain 0/1 expansion
+                # patterns, not ramp fractions).
                 start_read = False
-                difframp = []
+                in_xydata  = False
+                difframp   = []
                 for line in lines:
-                    if "##XYDATA" in line:
+                    s = line.strip()
+                    if '##XYDATA' in line and '(X++' in line:
                         start_read = True
+                        in_xydata  = True
                         continue
-                    if "##END" in line:
+                    if start_read and '##END' in line:
                         break
-                    if start_read and line.strip():
-                        difframp.append(float(line.strip()))
+                    # Stop at the next JCAMP block (e.g. another ##$SHAPE_*)
+                    if start_read and s.startswith('##') and '##XYDATA' not in line:
+                        break
+                    if start_read and in_xydata and s:
+                        try:
+                            difframp.append(float(s))
+                        except ValueError:
+                            # non-numeric line inside XYDATA block: skip
+                            continue
+                if not difframp:
+                    # Defensive: if XYDATA parser produced nothing usable, set
+                    # to None so the fallback below applies.
+                    difframp = None
+
+            # Record the ramp range actually used so the UI can label the
+            # table / linearity plot correctly.  For Bruker difframp values
+            # are typically 0.05–0.95; for Varian they are raw DAC units.
+            if difframp:
+                ramp_min_v = float(np.min(difframp))
+                ramp_max_v = float(np.max(difframp))
+                params['ramp_min'] = ramp_min_v
+                params['ramp_max'] = ramp_max_v
+                print(f"[Bruker param extraction] difframp min={ramp_min_v:.4f} max={ramp_max_v:.4f} n={len(difframp)}")
         except Exception as e:
             print(f"Param extraction error: {e}")
             pass
@@ -2016,6 +2051,8 @@ def process_nmr_data(extract_dir, lb=1.0, fft_points=None):
             difframp = abs_gz
             difflist = abs_gz
             params['dac_max'] = max_gz  # highest DAC value used
+            params['ramp_min'] = float(min(abs_gz))
+            params['ramp_max'] = float(max_gz)
 
             # Gradient calibration factor (G/cm per DAC unit) if available
             gcal = get_pp('gcal_', default=None)
@@ -2105,9 +2142,16 @@ def process_nmr_data(extract_dir, lb=1.0, fft_points=None):
     if difflist is None:
         difflist = np.linspace(2, 95, len(slices)).tolist()
     if difframp is None:
-        # If difflist exists, it's often similar to the ramp or the power
-        # For now, if missing, use 0-1 normalized version of difflist or indices
-        difframp = (np.array(difflist) / max(difflist)).tolist()
+        # When the difframp file is missing (common for older Bruker datasets
+        # or non-stebpgp1s pulse programs), fall back to a sensible linear ramp
+        # that respects the calibration best-practice of NOT maxing out the
+        # gradient coil at 100 %.  Using 5 %–95 % avoids the misleading
+        # '5 % – 100 %' ramp that arises from normalising difflist by its max
+        # (which would imply a perfect 100 % step at the last point).  This
+        # fallback is only for compatibility — when a difframp file is
+        # present, we always read it as the authoritative source.
+        n = len(slices) if len(slices) > 0 else len(difflist)
+        difframp = np.linspace(0.05, 0.95, n).tolist()
 
     # Detect Standard based on pulse program or folder name
     detected_standard = None
@@ -2388,13 +2432,30 @@ def analyze_peak():
         if vendor == 'varian':
             gcal_fit       = popt[1]              # G/cm per DAC unit
             gradients_gauss = np.array(diff_ramp) * gcal_fit   # G/cm
+            # Use the actual maximum data point — not extrapolated to a hypothetical
+            # "100% DAC" setting.  Matches what the calibration experiment covers.
             calculated_max_g_gauss = float(np.max(diff_ramp)) * gcal_fit
             fit_line_x = (ramp_smooth * gcal_fit).tolist()    # G/cm axis
         else:
-            G_max_fit = popt[1]                   # T/m
-            calculated_max_g_gauss = G_max_fit * 100.0        # G/cm
-            gradients_gauss = diff_ramp * calculated_max_g_gauss
-            fit_line_x = (ramp_smooth * calculated_max_g_gauss).tolist()
+            # Bruker: g_scale is the gradient reference amplitude at ramp = 1.0
+            # (i.e. the "100 % max setting" of the hardware), in T/m.
+            g_scale_fit = popt[1]                              # T/m at ramp = 1
+            # Effective g used in the Stejskal–Tanner equation already includes the
+            # shape factor (so the b-factor is correct).  When reporting the
+            # calibrated G/cm, multiply g_scale (the 100 % reference) by the
+            # *actual* highest ramp value used, NOT by 1.0.  This honours the
+            # real ramp range from the difframp file (e.g. 5 %–95 %, not 0–100 %)
+            # and stops the UI from claiming the calibration extends to 100 %
+            # when it actually only does to 95 %.
+            max_ramp_used = float(np.max(diff_ramp)) if len(diff_ramp) > 0 else 1.0
+            gradients_gauss = np.array(diff_ramp) * g_scale_fit * GRADIENT_SHAPE_FACTOR * 100.0
+            # `calibrated_max_g` = G/cm at the highest ramp value that the
+            # calibration experiment actually used (= max(difframp) * 100 % G/cm).
+            calculated_max_g_gauss = max_ramp_used * g_scale_fit * GRADIENT_SHAPE_FACTOR * 100.0
+            # For the dense fit-line x-axis we plot G/cm.  Use the fitted
+            # gradient (g_scale * shape * 100) per unit ramp so x = ramp_smooth
+            # is in G/cm.
+            fit_line_x = (ramp_smooth * g_scale_fit * GRADIENT_SHAPE_FACTOR * 100.0).tolist()
 
         # Linear calibration: G/cm = slope * x + intercept
         # x = DAC units (Varian) or 0-1 fraction (Bruker)
@@ -2414,6 +2475,13 @@ def analyze_peak():
         'gradient_steps': diff_ramp.tolist(),
         'gradients': gradients_gauss.tolist(),
         'calibrated_max_g': calculated_max_g_gauss,
+        # The actual ramp range used by the calibration experiment.  For Bruker
+        # this comes from the difframp file (e.g. 5 %–95 %); for Varian it is
+        # the lowest/highest DAC units actually used.  The UI uses these to
+        # label the linearity plot and gradient table correctly instead of
+        # silently extrapolating to 0–100 %.
+        'ramp_min': float(np.min(diff_ramp)) if len(diff_ramp) > 0 else 0.0,
+        'ramp_max': float(np.max(diff_ramp)) if len(diff_ramp) > 0 else 1.0,
         'fit_slope': float(slope),
         'fit_intercept': float(intercept),
         'delta': DELTA,

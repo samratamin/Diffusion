@@ -162,8 +162,8 @@
                                             <tr>
                                                 <th class="px-3 py-2">Step</th>
                                                 <th class="px-3 py-2" id="gradient-table-step-header">%</th>
-                                                <th class="px-2 py-2">DiffList</th>
-                                                <th class="px-3 py-2">Strength</th>
+                                                <th class="px-2 py-2" title="Instrument's stored gradient calibration (G/cm).  Shown for comparison only; the actual calibration uses the difframp file (Bruker) or DAC values (Varian).">Stored (G/cm)</th>
+                                                <th class="px-3 py-2">Calibrated (G/cm)</th>
                                             </tr>
                                         </thead>
                                         <tbody id="gradient-table-body" class="divide-y divide-gray-50"></tbody>
@@ -1900,11 +1900,29 @@
                 ? `<div class="flex justify-between text-amber-700"><span>Grad. shape factor:</span><span class="font-bold">${gfactor.toFixed(4)} (${gshape})</span></div>`
                 : '';
 
+            // Show the actual ramp range used (e.g. 5 %–95 %), and the G/cm
+            // at the highest setting we actually applied.  Previously the
+            // calibration label said "Max G" but used the value extrapolated
+            // to a 100 % ramp setting — even when the data only went to 95 %.
+            // We now report the value *at the highest ramp that was measured*
+            // (calibrated_max_g, returned from the server).  For the user's
+            // reference we also show the equivalent at the conventional
+            // "100 %" max setting when ramp_max < 1.0.
+            const _rMin  = (data.ramp_min !== undefined) ? data.ramp_min : (Math.min(...data.gradient_steps) || 0);
+            const _rMax  = (data.ramp_max !== undefined) ? data.ramp_max : (Math.max(...data.gradient_steps) || 1);
+            const _strMin = isVarian ? _rMin.toFixed(0) : (_rMin * 100).toFixed(1) + ' %';
+            const _strMax = isVarian ? _rMax.toFixed(0) : (_rMax * 100).toFixed(1) + ' %';
+            const _at100G = (_rMax < 0.9999) ? (data.fit_slope * 1.0 + data.fit_intercept) : null;
+
             document.getElementById('params-info').innerHTML = `
                 <div class="flex justify-between"><span>Δ Diffusion Time:</span> <span class="font-bold">${(data.big_delta * 1000).toFixed(1)} ms</span></div>
                 <div class="flex justify-between"><span>δ Pulse Width:</span> <span class="font-bold">${(data.delta * 1000).toFixed(1)} ms</span></div>
                 ${gshapeStr}
-                <div class="flex justify-between border-t pt-2 text-blue-800"><span>Calibrated Max G:</span> <span class="font-bold">${data.calibrated_max_g.toFixed(2)} G/cm</span></div>
+                <div class="flex justify-between text-gray-700"><span>Ramp range used:</span> <span class="font-bold">${_strMin} – ${_strMax}</span></div>
+                <div class="flex justify-between border-t pt-2 text-blue-800"><span>Max G (at ${_strMax}):</span> <span class="font-bold">${data.calibrated_max_g.toFixed(2)} G/cm</span></div>
+                ${_at100G !== null
+                    ? `<div class="flex justify-between text-gray-500"><span>Extrapolated at 100 %:</span> <span class="font-mono">${_at100G.toFixed(2)} G/cm</span></div>`
+                    : ''}
                 <div class="text-[10px] font-mono mt-2 text-center bg-white p-1 rounded border border-blue-100">
                     G(${xSymbol}) = ${slopeStr}·${xSymbol} ${data.fit_intercept >= 0 ? '+ ' + interceptAbsStr : '- ' + interceptAbsStr}
                 </div>
@@ -1920,27 +1938,39 @@
             if (isVarian) {
                 // Varian: x-axis is raw DAC units
                 const xMax = Math.max(...data.gradient_steps);
+                const xMin = Math.min(...data.gradient_steps);
                 Plotly.newPlot('linearity-plot', [
                     { x: data.gradient_steps, y: data.gradients, mode: 'markers', name: 'Data', marker: {color:'green', size: 8} },
-                    { x: [0, xMax], y: [data.fit_intercept, data.fit_slope * xMax + data.fit_intercept],
+                    { x: [xMin, xMax], y: [data.fit_slope * xMin + data.fit_intercept, data.fit_slope * xMax + data.fit_intercept],
                       mode: 'lines', name: 'Linear Fit', line: {color: 'rgba(0,128,0,0.5)', dash: 'dot', width: 2} }
                 ], {
                     title: 'Gradient Linearity',
-                    xaxis: {title: 'Gradient Level (DAC units)', range: [0, xMax * 1.05], zeroline: false},
+                    xaxis: {title: 'Gradient Level (DAC units)', range: [Math.max(0, xMin * 0.95), xMax * 1.05], zeroline: false},
                     yaxis: {title: 'Strength (G/cm)', zeroline: false},
                     margin: {t:40}, showlegend: true, legend: {x:0, y:1}
                 }, { responsive: true, displayModeBar: false });
             } else {
-                // Bruker: x-axis is setting % (gradient_steps are 0-1 fractions, displayed as %)
+                // Bruker: x-axis is setting %.  Honour the actual ramp range used
+                // in the difframp file (e.g. 5 %–95 %), not a hard-coded 0–100 %.
+                // Without this, the linear-fit line was drawn all the way to
+                // 100 % even when the data only covered 95 %, which is the
+                // "5 % to 100 %" mismatch the calibration reported.
+                const rMin = (data.ramp_min !== undefined) ? data.ramp_min : Math.min(...data.gradient_steps);
+                const rMax = (data.ramp_max !== undefined) ? data.ramp_max : Math.max(...data.gradient_steps);
+                const pctMin = rMin * 100;
+                const pctMax = rMax * 100;
+                const yAtMin = data.fit_slope * rMin + data.fit_intercept;
+                const yAtMax = data.fit_slope * rMax + data.fit_intercept;
+                const headroom = Math.max(pctMax * 0.05, 2);
                 Plotly.newPlot('linearity-plot', [
                     { x: data.gradient_steps.map(s => s * 100), y: data.gradients, mode: 'markers', name: 'Data', marker: {color:'green', size: 8} },
-                    { x: [0, 100], y: [data.fit_intercept, data.fit_slope * 1.0 + data.fit_intercept],
+                    { x: [pctMin, pctMax], y: [yAtMin, yAtMax],
                       mode: 'lines', name: 'Linear Fit', line: {color: 'rgba(0,128,0,0.5)', dash: 'dot', width: 2} }
                 ], {
-                    title: 'Gradient Linearity',
-                    xaxis: {title: 'Setting (%)', range: [0, 105], zeroline: false},
+                    title: `Gradient Linearity (${pctMin.toFixed(1)} % – ${pctMax.toFixed(1)} %)`,
+                    xaxis: {title: 'Setting (%)', range: [Math.max(0, pctMin - headroom), pctMax + headroom], zeroline: false},
                     yaxis: {title: 'Strength (G/cm)', zeroline: false},
-                    margin: {t:40}, showlegend: true, legend: {x:0, y:1}
+                    margin: {t:50}, showlegend: true, legend: {x:0, y:1}
                 }, { responsive: true, displayModeBar: false });
             }
             // Update the peak marker (fast relayout — no full data redraw)
@@ -1959,14 +1989,30 @@
             tbody.innerHTML = '';
             const isVarianTbl = (data.vendor === 'varian');
             document.getElementById('gradient-table-step-header').textContent = isVarianTbl ? 'DAC' : '%';
+
+            // Highlight rows where the spectrometer's stored value (difflist)
+            // diverges from our just-fitted calibration by more than 5 %.
+            // That's exactly the cross-check the user asked for.
+            const _dl = Array.isArray(data.difflist) ? data.difflist : [];
             data.gradients.forEach((g, i) => {
                 const stepLabel = isVarianTbl
                     ? `${Math.round(data.gradient_steps[i])}`
                     : `${(data.gradient_steps[i]*100).toFixed(1)}%`;
-                const row = `<tr>
+                const stored = _dl[i];
+                let storedCell = '<span class="text-gray-300">—</span>';
+                let rowStyle   = '';
+                if (stored !== undefined && stored !== null && g > 0) {
+                    const diff = Math.abs(stored - g) / Math.max(Math.abs(g), 1e-9);
+                    const cls = diff > 0.05
+                        ? (diff > 0.15 ? 'text-red-600 font-semibold' : 'text-amber-700 font-semibold')
+                        : 'text-gray-400';
+                    storedCell = `<span class="${cls}">${stored.toFixed(2)}</span>`;
+                    if (diff > 0.15) rowStyle = 'background: rgba(239, 68, 68, 0.06);';
+                }
+                const row = `<tr style="${rowStyle}">
                     <td class="px-3 py-1.5 font-mono text-gray-500">${i+1}</td>
                     <td class="px-3 py-1.5 font-mono">${stepLabel}</td>
-                    <td class="px-2 py-1.5 font-mono text-gray-400">${(data.difflist[i] ? data.difflist[i].toFixed(2) : "-")}</td>
+                    <td class="px-2 py-1.5 font-mono">${storedCell}</td>
                     <td class="px-3 py-1.5 font-mono font-bold text-blue-600">${g.toFixed(2)}</td>
                 </tr>`;
                 tbody.innerHTML += row;
@@ -2304,7 +2350,18 @@
             lines.push('  where x =               ' + xLabel);
             lines.push('  slope:                  ' + r.fit_slope.toExponential(5) + ' G/cm / (' + xLabel + ')');
             lines.push('  intercept:              ' + r.fit_intercept.toExponential(5) + ' G/cm');
-            lines.push('  Max gradient (fitted):  ' + r.calibrated_max_g.toFixed(4) + ' G/cm');
+            if (r.ramp_min !== undefined && r.ramp_max !== undefined) {
+                if (vendor === 'varian') {
+                    lines.push('  Ramp range used:        ' + r.ramp_min.toFixed(0) + ' – ' + r.ramp_max.toFixed(0) + ' DAC units');
+                } else {
+                    lines.push('  Ramp range used:        ' + (r.ramp_min * 100).toFixed(1) + ' % – ' + (r.ramp_max * 100).toFixed(1) + ' %');
+                }
+            }
+            lines.push('  Max G (at highest ramp):' + r.calibrated_max_g.toFixed(4) + ' G/cm');
+            if (vendor !== 'varian' && r.ramp_max !== undefined && r.ramp_max < 0.9999) {
+                const g100 = r.fit_slope * 1.0 + r.fit_intercept;
+                lines.push('  Extrapolated at 100 %:  ' + g100.toFixed(4) + ' G/cm  (linear fit extrapolation)');
+            }
             lines.push('');
             lines.push('3. GRADIENT TABLE');
             lines.push(hr2);
