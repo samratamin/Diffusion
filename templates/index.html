@@ -519,6 +519,201 @@
                                     </table>
                                 </div>
 
+                                <!-- ═════ Hydrodynamic Radius & Molecular Weight (DOSY → R_H, M_W) ═══ -->
+                                <div id="mw-rh-panel" class="hidden border-t border-gray-100 pt-8 mt-8 space-y-6">
+                                    <div class="flex items-center justify-between flex-wrap gap-3">
+                                        <div class="flex items-center gap-3">
+                                            <i class="fas fa-atom text-2xl text-blue-600"></i>
+                                            <div>
+                                                <h3 class="text-lg font-black text-gray-800">Hydrodynamic Radius &amp; Molecular Weight</h3>
+                                                <p class="text-[11px] text-gray-500">
+                                                    Convert DOSY diffusion coefficients <span class="font-mono">D</span>
+                                                    into <span class="font-mono">R<sub>H</sub></span> (Stokes–Einstein) and
+                                                    <span class="font-mono">M<sub>W</sub></span> (Mark–Houwink / log D–log M).
+                                                </p>
+                                            </div>
+                                        </div>
+                                        <button id="mw-rh-toggle" onclick="toggleMwRhPanel()" class="text-[11px] font-bold text-blue-600 hover:underline uppercase tracking-wider">
+                                            Collapse
+                                        </button>
+                                    </div>
+
+                                    <div id="mw-rh-body" class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                                        <!-- LEFT: inputs -->
+                                        <div class="lg:col-span-5 space-y-5">
+                                            <!-- Temperature & solvent -->
+                                            <div class="p-5 bg-blue-50/50 border border-blue-100 rounded-2xl">
+                                                <h4 class="text-[10px] font-black text-blue-500 uppercase tracking-widest mb-3">Experiment Conditions</h4>
+                                                <div class="grid grid-cols-2 gap-3">
+                                                    <div>
+                                                        <label class="block text-[10px] font-bold text-gray-500 uppercase mb-1">Temperature (°C)</label>
+                                                        <input type="number" id="mw-t-c" value="25" step="0.1" min="-20" max="120"
+                                                               class="w-full border border-gray-200 rounded-lg p-2 text-sm font-mono focus:ring-2 focus:ring-blue-300 outline-none">
+                                                    </div>
+                                                    <div>
+                                                        <label class="block text-[10px] font-bold text-gray-500 uppercase mb-1">Solvent</label>
+                                                        <select id="mw-solvent" onchange="onSolventChange()"
+                                                                class="w-full border border-gray-200 rounded-lg p-2 text-sm focus:ring-2 focus:ring-blue-300 outline-none">
+                                                            <option value="">Loading…</option>
+                                                        </select>
+                                                    </div>
+                                                </div>
+                                                <div id="mw-viscosity-display" class="mt-2 text-[11px] text-gray-500 font-mono">
+                                                    η = — cP
+                                                </div>
+                                                <div class="mt-2 text-[10px] text-gray-400 italic">
+                                                    Reference: Stokes–Einstein equation. k<sub>B</sub> = 1.380649 × 10<sup>-23</sup> J/K (CODATA 2018).
+                                                </div>
+                                            </div>
+
+                                            <!-- Calibration mode selector -->
+                                            <div class="p-5 bg-white border border-gray-200 rounded-2xl shadow-sm">
+                                                <h4 class="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-3">Calibration Source</h4>
+                                                <div class="space-y-2">
+                                                    <label class="flex items-start gap-2 cursor-pointer p-2 rounded-lg hover:bg-gray-50">
+                                                        <input type="radio" name="mw-mode" value="library" checked onchange="onMwModeChange()" class="mt-1">
+                                                        <div>
+                                                            <div class="text-xs font-bold text-gray-700">Published polymer calibration</div>
+                                                            <div class="text-[10px] text-gray-500">Use a table of measured K, α from Ruzicka 2023, Li 2012, Hou 2021</div>
+                                                        </div>
+                                                    </label>
+                                                    <label class="flex items-start gap-2 cursor-pointer p-2 rounded-lg hover:bg-gray-50">
+                                                        <input type="radio" name="mw-mode" value="custom_kalpha" onchange="onMwModeChange()" class="mt-1">
+                                                        <div>
+                                                            <div class="text-xs font-bold text-gray-700">Custom K and α</div>
+                                                            <div class="text-[10px] text-gray-500">Enter your own coefficients (e.g., from a private calibration)</div>
+                                                        </div>
+                                                    </label>
+                                                    <label class="flex items-start gap-2 cursor-pointer p-2 rounded-lg hover:bg-gray-50">
+                                                        <input type="radio" name="mw-mode" value="standards" onchange="onMwModeChange()" class="mt-1">
+                                                        <div>
+                                                            <div class="text-xs font-bold text-gray-700">Fit on your own standards</div>
+                                                            <div class="text-[10px] text-gray-500">Paste (D, M) pairs; we fit log D vs log M and apply it</div>
+                                                        </div>
+                                                    </label>
+                                                </div>
+
+                                                <!-- Mode-specific controls -->
+                                                <div id="mw-mode-library" class="mt-3 space-y-2">
+                                                    <label class="block text-[10px] font-bold text-gray-500 uppercase">Polymer / solvent / temperature</label>
+                                                    <select id="mw-polymer-cal" class="w-full border border-gray-200 rounded-lg p-2 text-sm focus:ring-2 focus:ring-blue-300 outline-none">
+                                                        <option value="">Loading…</option>
+                                                    </select>
+                                                    <div id="mw-polymer-info" class="text-[11px] text-gray-500 font-mono leading-relaxed"></div>
+                                                    <label class="flex items-center gap-2 mt-2">
+                                                        <input type="checkbox" id="mw-apply-viscosity-correction">
+                                                        <span class="text-[11px] text-gray-600">Apply universal-calibration viscosity correction (Ruzicka 2023, eq. 7)</span>
+                                                    </label>
+                                                </div>
+
+                                                <div id="mw-mode-custom" class="mt-3 hidden space-y-2">
+                                                    <div class="grid grid-cols-2 gap-3">
+                                                        <div>
+                                                            <label class="block text-[10px] font-bold text-gray-500 uppercase mb-1">K</label>
+                                                            <input type="number" id="mw-custom-K" step="any" placeholder="e.g. 2.5e-9"
+                                                                   class="w-full border border-gray-200 rounded-lg p-2 text-sm font-mono focus:ring-2 focus:ring-blue-300 outline-none">
+                                                        </div>
+                                                        <div>
+                                                            <label class="block text-[10px] font-bold text-gray-500 uppercase mb-1">α (Mark–Houwink)</label>
+                                                            <input type="number" id="mw-custom-alpha" step="any" placeholder="e.g. 0.55"
+                                                                   class="w-full border border-gray-200 rounded-lg p-2 text-sm font-mono focus:ring-2 focus:ring-blue-300 outline-none">
+                                                        </div>
+                                                    </div>
+                                                    <label class="flex items-center gap-2 mt-2">
+                                                        <input type="checkbox" id="mw-apply-viscosity-correction-custom">
+                                                        <span class="text-[11px] text-gray-600">Apply universal-calibration viscosity correction</span>
+                                                    </label>
+                                                    <div id="mw-viscosity-ref-block" class="grid grid-cols-2 gap-3 mt-2 hidden">
+                                                        <div>
+                                                            <label class="block text-[10px] font-bold text-gray-500 uppercase mb-1">Reference T (K)</label>
+                                                            <input type="number" id="mw-t-ref-K" value="298.15" step="0.01"
+                                                                   class="w-full border border-gray-200 rounded-lg p-2 text-sm font-mono focus:ring-2 focus:ring-blue-300 outline-none">
+                                                        </div>
+                                                        <div>
+                                                            <label class="block text-[10px] font-bold text-gray-500 uppercase mb-1">Reference η (cP)</label>
+                                                            <input type="number" id="mw-eta-ref-cP" step="any" placeholder="e.g. 0.539"
+                                                                   class="w-full border border-gray-200 rounded-lg p-2 text-sm font-mono focus:ring-2 focus:ring-blue-300 outline-none">
+                                                        </div>
+                                                    </div>
+                                                </div>
+
+                                                <div id="mw-mode-standards" class="mt-3 hidden">
+                                                    <label class="block text-[10px] font-bold text-gray-500 uppercase mb-1">
+                                                        Standards — pairs of (D in m²/s, M_W in g/mol)
+                                                    </label>
+                                                    <table class="w-full text-xs">
+                                                        <thead>
+                                                            <tr class="text-gray-500">
+                                                                <th class="px-2 py-1 text-left">D (m²/s)</th>
+                                                                <th class="px-2 py-1 text-left">M<sub>W</sub> (g/mol)</th>
+                                                                <th class="px-1 py-1"></th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody id="mw-standards-body"></tbody>
+                                                    </table>
+                                                    <div class="flex items-center justify-between mt-2">
+                                                        <button onclick="addMwStandardRow()" class="text-[10px] font-bold text-blue-600 hover:underline">+ Add standard</button>
+                                                        <button onclick="loadMwStandardPreset()" class="text-[10px] font-bold text-gray-500 hover:underline">Load example (PS)</button>
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            <button id="mw-calculate-btn" onclick="runMwRhCalc()"
+                                                    class="w-full bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-xl font-bold text-sm shadow-md transition-all active:scale-95 flex items-center justify-center gap-2">
+                                                <i class="fas fa-calculator"></i> Calculate R<sub>H</sub> &amp; M<sub>W</sub>
+                                            </button>
+                                            <div id="mw-error" class="hidden text-red-600 text-xs p-2 bg-red-50 rounded-lg border border-red-100"></div>
+                                        </div>
+
+                                        <!-- RIGHT: results -->
+                                        <div class="lg:col-span-7">
+                                            <div id="mw-results-placeholder" class="h-full min-h-[300px] flex flex-col items-center justify-center bg-gradient-to-br from-gray-50 to-blue-50/30 rounded-2xl border-2 border-dashed border-gray-200 p-8 text-center">
+                                                <div class="w-14 h-14 rounded-full bg-blue-100 flex items-center justify-center mb-4">
+                                                    <i class="fas fa-atom text-2xl text-blue-500"></i>
+                                                </div>
+                                                <h4 class="text-sm font-bold text-gray-700 mb-1">No results yet</h4>
+                                                <p class="text-[11px] text-gray-500 leading-relaxed max-w-xs">
+                                                    Configure the conditions on the left and click
+                                                    <span class="font-bold text-blue-600">Calculate</span>
+                                                    to compute
+                                                    <span class="font-mono">R<sub>H</sub></span> and
+                                                    <span class="font-mono">M<sub>W</sub></span>
+                                                    for each analysis peak.
+                                                </p>
+                                            </div>
+
+                                            <div id="mw-results" class="hidden space-y-4">
+                                                <div id="mw-calibration-summary" class="text-[11px] text-gray-600 bg-blue-50/40 rounded-lg p-3 border border-blue-100/70 font-mono leading-relaxed"></div>
+                                                <div class="overflow-x-auto rounded-xl border border-gray-100 shadow-sm">
+                                                    <table class="w-full text-xs text-left">
+                                                        <thead class="bg-gray-50 text-gray-700 font-bold">
+                                                            <tr>
+                                                                <th class="px-3 py-2">Peak</th>
+                                                                <th class="px-3 py-2">D (m²/s)</th>
+                                                                <th class="px-3 py-2">D<sub>eff</sub> (m²/s)</th>
+                                                                <th class="px-3 py-2">R<sub>H</sub> (nm)</th>
+                                                                <th class="px-3 py-2">M<sub>W</sub> (g/mol)</th>
+                                                                <th class="px-3 py-2">Warnings</th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody id="mw-results-body" class="divide-y divide-gray-50 font-mono"></tbody>
+                                                    </table>
+                                                </div>
+                                                <div id="mw-warnings" class="hidden text-amber-700 text-xs p-3 bg-amber-50 rounded-lg border border-amber-200 space-y-1"></div>
+                                                <div class="flex gap-2">
+                                                    <button onclick="downloadMwRhCsv()" class="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-700 py-2 rounded-xl text-xs font-bold uppercase tracking-wider transition-all">
+                                                        <i class="fas fa-download mr-1"></i> Download CSV
+                                                    </button>
+                                                    <button onclick="includeMwInReport(true)" id="mw-include-report-btn"
+                                                            class="flex-1 bg-green-100 hover:bg-green-200 text-green-800 py-2 rounded-xl text-xs font-bold uppercase tracking-wider transition-all">
+                                                        <i class="fas fa-file-alt mr-1"></i> Add to Analysis Report
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
                                 <!-- NEW: Integrated Multi-slice Verification Panel at Bottom -->
                                 <div id="verification-panel" class="hidden border-t border-gray-100 pt-8 mt-8 space-y-6">
                                     <div class="flex items-center justify-between">
@@ -2116,6 +2311,424 @@
             });
         });
 
+        /* ───────────── Hydrodynamic Radius & Molecular Weight (DOSY → R_H, M_W) ───────────── */
+        // All state for the new panel is kept here so it doesn't interfere with
+        // calibration / analysis code.  The state survives across renders.
+        let mwRhLibraryCache = null;     // {polymers, solvents} from /api/mw_rh_library
+        let mwRhLibraryLoadedAt = 0;     // ms timestamp of last successful load
+        let mwRhResults = null;          // last successful backend response from /api/mw_rh_calc
+        let lastMwRhStandards = [];      // [{d, m}, ...] for "standards" mode
+
+        function toggleMwRhPanel() {
+            const body = document.getElementById('mw-rh-body');
+            const btn  = document.getElementById('mw-rh-toggle');
+            const isHidden = body.classList.toggle('hidden');
+            btn.textContent = isHidden ? 'Expand' : 'Collapse';
+        }
+
+        function showMwRhPanelAfterAnalysis(data) {
+            // Pull D values + fractional errors (when available) from the
+            // analysis we just rendered, so the panel is pre-populated.
+            const panel = document.getElementById('mw-rh-panel');
+            if (!panel) return;
+            panel.classList.remove('hidden');
+            populateMwRhInputsFromAnalysis(data);
+            ensureMwRhLibraryFresh();
+            // Reset any previous output
+            document.getElementById('mw-results').classList.add('hidden');
+            document.getElementById('mw-results-placeholder').classList.remove('hidden');
+            document.getElementById('mw-calibration-summary').innerHTML = '';
+            document.getElementById('mw-results-body').innerHTML = '';
+            const errEl = document.getElementById('mw-error');
+            errEl.classList.add('hidden');
+            errEl.textContent = '';
+        }
+
+        async function ensureMwRhLibraryFresh() {
+            // Re-fetch the polymer / solvent library every ~10 min in case
+            // someone updated mw_rh.py and restarted the server.
+            const now = Date.now();
+            if (mwRhLibraryCache && (now - mwRhLibraryLoadedAt) < 10 * 60 * 1000) {
+                return;
+            }
+            try {
+                const res = await fetch('/api/mw_rh_library');
+                if (!res.ok) throw new Error('library HTTP ' + res.status);
+                mwRhLibraryCache = await res.json();
+                mwRhLibraryLoadedAt = now;
+                populateMwRhDropdowns();
+            } catch (e) {
+                console.error('Failed to fetch MW/Rh library:', e);
+                // Show a non-fatal hint in the viscosity display area.
+                const visEl = document.getElementById('mw-viscosity-display');
+                if (visEl) visEl.innerHTML =
+                    '<span class="text-amber-600">⚠ Library not loaded (' +
+                    String(e).slice(0, 60) + ').  The default solvent is CDCl3 at 25 °C.</span>';
+            }
+        }
+
+        function populateMwRhDropdowns() {
+            if (!mwRhLibraryCache) return;
+            // Solvents
+            const sel = document.getElementById('mw-solvent');
+            if (sel && !sel.dataset.filled) {
+                sel.innerHTML = '<option value="">-- Select solvent --</option>'
+                    + mwRhLibraryCache.solvents.map(s =>
+                        `<option value="${s.name}" data-eta="${s.viscosity_cP}">${s.name}</option>`
+                    ).join('')
+                    + '<option value="__custom__">Custom (enter viscosity below)</option>';
+                sel.dataset.filled = '1';
+                sel.value = 'CDCl3 (chloroform-d)';
+                onSolventChange();
+            }
+            // Polymers
+            const psel = document.getElementById('mw-polymer-cal');
+            if (psel && !psel.dataset.filled) {
+                psel.innerHTML = mwRhLibraryCache.polymers.map((p, i) =>
+                    `<option value="${i}">${p.name}  (K=${p.K.toExponential(2)}, α=${p.alpha.toFixed(3)})</option>`
+                ).join('');
+                psel.dataset.filled = '1';
+                psel.value = '0';
+                onMwModeChange();
+            }
+        }
+
+        function onSolventChange() {
+            const sel = document.getElementById('mw-solvent');
+            const opt = sel.options[sel.selectedIndex];
+            const eta = parseFloat(opt.dataset.eta);
+            const disp = document.getElementById('mw-viscosity-display');
+            if (sel.value === '__custom__' || !isFinite(eta)) {
+                // Insert a custom-viscosity field
+                let inp = document.getElementById('mw-custom-eta-cP');
+                if (!inp) {
+                    const holder = document.getElementById('mw-viscosity-display').parentElement;
+                    const wrap = document.createElement('div');
+                    wrap.className = 'mt-2';
+                    wrap.innerHTML =
+                        `<label class="block text-[10px] font-bold text-gray-500 uppercase mb-1">η (cP / mPa·s)</label>`
+                      + `<input type="number" id="mw-custom-eta-cP" step="any" value="0.5" `
+                      + `class="w-32 border border-gray-200 rounded-lg p-1.5 text-sm font-mono focus:ring-2 focus:ring-blue-300 outline-none">`;
+                    holder.appendChild(wrap);
+                    inp = wrap.querySelector('input');
+                    inp.addEventListener('input', () => {
+                        const t = parseFloat(document.getElementById('mw-t-c').value) || 25;
+                        disp.textContent = `η = ${inp.value} cP at ${t.toFixed(1)} °C (custom)`;
+                    });
+                }
+                disp.textContent = `Custom viscosity — enter a value (default 0.5 cP).`;
+            } else {
+                // Tidy up: remove stale custom input if it exists
+                const old = document.getElementById('mw-custom-eta-cP');
+                if (old) old.closest('div').remove();
+                const t = parseFloat(document.getElementById('mw-t-c').value) || 25;
+                disp.innerHTML = `η = <span class="font-bold">${eta.toFixed(3)}</span> cP at ${t.toFixed(1)} °C.`;
+            }
+        }
+
+        function onMwModeChange() {
+            const mode = (document.querySelector('input[name="mw-mode"]:checked') || {}).value || 'library';
+            // Radio values are 'library' | 'custom_kalpha' | 'standards', but the
+            // div ids use the short suffix 'custom' (mw-mode-custom).  Map them.
+            const divSuffix = mode === 'custom_kalpha' ? 'custom' : mode;
+            ['library', 'custom', 'standards'].forEach(m => {
+                const el = document.getElementById('mw-mode-' + m);
+                if (el) el.classList.toggle('hidden', m !== divSuffix);
+            });
+            // If polymer list not yet filled, fill it
+            if (mode === 'library') {
+                updateMwPolymerInfo();
+            }
+            // Make custom viscosity-correction fields visible iff the box is on
+            const cb = document.getElementById('mw-apply-viscosity-correction-custom');
+            if (cb) {
+                const block = document.getElementById('mw-viscosity-ref-block');
+                if (block) block.classList.toggle('hidden', !cb.checked);
+            }
+        }
+
+        function updateMwPolymerInfo() {
+            if (!mwRhLibraryCache) return;
+            const idx = parseInt(document.getElementById('mw-polymer-cal').value);
+            const p   = mwRhLibraryCache.polymers[idx];
+            const target = document.getElementById('mw-polymer-info');
+            if (!p || !target) return;
+            target.innerHTML =
+                `log₁₀ D = log₁₀ K − α·log₁₀ M, &nbsp; <span class="font-bold">K = ${p.K.toExponential(3)}</span>, `
+                + `<span class="font-bold">α = ${p.alpha.toFixed(3)}</span><br>`
+                + `<span class="text-gray-400">${p.source}</span>`
+                + (p.T_C ? ` &nbsp;·&nbsp; T = ${p.T_C.toFixed(1)} °C &nbsp;·&nbsp; solvent = ${p.solvent}` : '');
+        }
+
+        function addMwStandardRow(d = '', m = '') {
+            const tbody = document.getElementById('mw-standards-body');
+            const i = tbody.children.length;
+            const tr = document.createElement('tr');
+            tr.className = 'align-middle';
+            tr.innerHTML =
+                `<td class="px-2 py-1"><input type="text" value="${d}" class="mw-std-d w-full border border-gray-200 rounded p-1 font-mono text-xs" placeholder="e.g. 2.5e-10"></td>`
+              + `<td class="px-2 py-1"><input type="text" value="${m}" class="mw-std-m w-full border border-gray-200 rounded p-1 font-mono text-xs" placeholder="e.g. 50000"></td>`
+              + `<td class="px-1 py-1 text-right"><button onclick="this.closest('tr').remove()" class="text-red-500 hover:text-red-700 font-bold text-xs">×</button></td>`;
+            tbody.appendChild(tr);
+        }
+
+        function loadMwStandardPreset() {
+            // PS narrow standards in benzene-d6 at 25 °C  (Li 2012, Table 1).
+            // These are illustrative only; users should load their own data.
+            const tbody = document.getElementById('mw-standards-body');
+            tbody.innerHTML = '';
+            const ps = [
+                { m:    9000, d: 1.27e-10 },
+                { m:   17900, d: 8.93e-11 },
+                { m:   50400, d: 4.20e-11 },
+                { m:   96000, d: 3.00e-11 },
+                { m:  192000, d: 2.30e-11 },
+                { m:  483000, d: 1.40e-11 },
+                { m:  900000, d: 9.50e-12 },
+                { m: 1830000, d: 6.60e-12 },
+            ];
+            ps.forEach(p => addMwStandardRow(p.d.toExponential(2), String(p.m)));
+        }
+
+        function collectMwStandards() {
+            const rows = document.getElementById('mw-standards-body').children;
+            const out = [];
+            for (const tr of rows) {
+                const d_inp = tr.querySelector('.mw-std-d');
+                const m_inp = tr.querySelector('.mw-std-m');
+                const d = parseFloat(d_inp.value);
+                const m = parseFloat(m_inp.value);
+                if (isFinite(d) && isFinite(m) && d > 0 && m > 0) {
+                    out.push({ d, m });
+                }
+            }
+            return out;
+        }
+
+        function populateMwRhInputsFromAnalysis(data) {
+            // Called after a successful analysis run.  Stores D values in a
+            // global so the next Calculate click posts them automatically.
+            if (!data || !data.results) return;
+            mwRhResults = null;  // force re-calc after a new analysis
+            window._mwRhLatestD = data.results.map((r, i) => ({
+                d:        r.d_value,
+                d_err_pct: (r.error_pct != null && isFinite(r.error_pct)) ? r.error_pct : null,
+                label:    r.ppm != null ? `${(+r.ppm).toFixed(3)} ppm` : `Peak ${i+1}`,
+            })).filter(p => isFinite(p.d) && p.d > 0);
+        }
+
+        function getMwViscosityCPSelected() {
+            // Helper: returns η in cP given current UI selection
+            const sel = document.getElementById('mw-solvent');
+            if (sel.value === '__custom__') {
+                const inp = document.getElementById('mw-custom-eta-cP');
+                return inp ? parseFloat(inp.value) : NaN;
+            }
+            const opt = sel.options[sel.selectedIndex];
+            return parseFloat(opt.dataset.eta);
+        }
+
+        async function runMwRhCalc() {
+            // Sanity: do we have D values from the analysis?
+            const peaks = window._mwRhLatestD || [];
+            if (peaks.length === 0) {
+                showMwError('Run an analysis first (the D values from the analysis are used as input).');
+                return;
+            }
+            const T_C = parseFloat(document.getElementById('mw-t-c').value);
+            const eta_cP = getMwViscosityCPSelected();
+            if (!isFinite(T_C) || !isFinite(eta_cP) || eta_cP <= 0) {
+                showMwError('Temperature and solvent viscosity must be valid numbers.');
+                return;
+            }
+            const mode = (document.querySelector('input[name="mw-mode"]:checked') || {}).value || 'library';
+            const payload = {
+                mode,
+                T_K: T_C + 273.15,
+                eta_cP,
+                D_list: peaks.map(p => p.d),
+                peak_labels: peaks.map(p => p.label),
+            };
+            if (peaks[0].d_err_pct != null) {
+                payload.D_err_frac_list = peaks.map(p => p.d_err_pct);
+            }
+            if (mode === 'library') {
+                payload.polymer_calibration_index = parseInt(
+                    document.getElementById('mw-polymer-cal').value
+                );
+                payload.apply_viscosity_correction =
+                    document.getElementById('mw-apply-viscosity-correction').checked;
+            } else if (mode === 'custom_kalpha') {
+                payload.K     = parseFloat(document.getElementById('mw-custom-K').value);
+                payload.alpha = parseFloat(document.getElementById('mw-custom-alpha').value);
+                const apply  = document.getElementById('mw-apply-viscosity-correction-custom').checked;
+                payload.apply_viscosity_correction = apply;
+                if (apply) {
+                    payload.T_ref_K     = parseFloat(document.getElementById('mw-t-ref-K').value);
+                    payload.eta_ref_cP  = parseFloat(document.getElementById('mw-eta-ref-cP').value);
+                }
+            } else if (mode === 'standards') {
+                const stds = collectMwStandards();
+                if (stds.length < 2) {
+                    showMwError('Provide at least 2 (D, M) standards to fit a calibration.');
+                    return;
+                }
+                payload.standards = stds;
+            }
+
+            const btn = document.getElementById('mw-calculate-btn');
+            const orig = btn.innerHTML;
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i> Calculating…';
+            try {
+                const res = await fetch('/api/mw_rh_calc', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const body = await res.json();
+                if (!res.ok || body.ok === false) {
+                    showMwError(body.error || 'HTTP ' + res.status);
+                    return;
+                }
+                hideMwError();
+                mwRhResults = body;
+                renderMwRhResults(body);
+            } catch (e) {
+                showMwError('Request failed: ' + e.message);
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = orig;
+            }
+        }
+
+        function showMwError(msg) {
+            const el = document.getElementById('mw-error');
+            el.textContent = msg;
+            el.classList.remove('hidden');
+        }
+        function hideMwError() {
+            document.getElementById('mw-error').classList.add('hidden');
+        }
+
+        function renderMwRhResults(body) {
+            document.getElementById('mw-results-placeholder').classList.add('hidden');
+            document.getElementById('mw-results').classList.remove('hidden');
+
+            const summary = document.getElementById('mw-calibration-summary');
+            const cal = body.calibration || {};
+            let html = '<span class="font-bold">Calibration:</span> ' + (cal.description || 'unknown');
+            if (cal.using_universal) {
+                html +=
+                    '<br><span class="text-amber-700 text-[10px]">⚠ using universal calibration (viscosity/T corrected to reference)</span>';
+            }
+            if (body.fit) {
+                const f = body.fit;
+                html +=
+                    '<br><span class="text-gray-500 text-[10px]">Fit on ' + f.n + ' standards: '
+                  + 'log₁₀ K = ' + f.log10_K.toFixed(4)
+                  + ', α = ' + f.alpha.toFixed(4)
+                  + ', R² = ' + f.r_squared.toFixed(4)
+                  + (f.r_squared < 0.95 ? ' (⚠ below 0.95)' : '')
+                  + '</span>';
+            }
+            summary.innerHTML = html;
+
+            const tbody = document.getElementById('mw-results-body');
+            tbody.innerHTML = '';
+            body.per_peak.forEach((p, i) => {
+                const err = p.R_H_nm_err != null ? ' ± ' + p.R_H_nm_err.toFixed(2) : '';
+                const m_minus = p.M_W_gmol_err_minus != null ? '−' + fmtMW(p.M_W_gmol_err_minus) : '';
+                const m_plus  = p.M_W_gmol_err_plus  != null ? '+' + fmtMW(p.M_W_gmol_err_plus)  : '';
+                const m_err   = (m_minus || m_plus) ? '  (' + m_minus + ' / ' + m_plus + ')' : '';
+                const warn = (p.warnings && p.warnings.length)
+                    ? '⚠ <span class="text-amber-700" title="' + p.warnings.join(' / ').replace(/"/g, '&quot;') + '">check</span>'
+                    : '<span class="text-green-600">✓</span>';
+                const tr = document.createElement('tr');
+                tr.className = i % 2 === 0 ? '' : 'bg-gray-50/40';
+                tr.innerHTML =
+                    `<td class="px-3 py-2 text-gray-600">${p.label}</td>`
+                  + `<td class="px-3 py-2">${p.D.toExponential(3)}</td>`
+                  + `<td class="px-3 py-2 text-gray-400">${p.D_effective.toExponential(3)}</td>`
+                  + `<td class="px-3 py-2 text-blue-700 font-bold">${p.R_H_nm.toFixed(3)}${err}</td>`
+                  + `<td class="px-3 py-2">${fmtMW(p.M_W_gmol)}${m_err}</td>`
+                  + `<td class="px-3 py-2">${warn}</td>`;
+                tbody.appendChild(tr);
+            });
+
+            // global warnings
+            const warnEl = document.getElementById('mw-warnings');
+            warnEl.innerHTML = '';
+            if (body.warnings && body.warnings.length) {
+                warnEl.classList.remove('hidden');
+                body.warnings.forEach(w => {
+                    const p = document.createElement('div');
+                    p.textContent = '⚠ ' + w;
+                    warnEl.appendChild(p);
+                });
+            } else {
+                warnEl.classList.add('hidden');
+            }
+        }
+
+        function fmtMW(x) {
+            // Human-friendly: 12,345 g/mol or 1.23e4 g/mol etc.
+            if (!isFinite(x) || x <= 0) return '—';
+            if (x < 10_000) {
+                return x.toFixed(1);
+            } else if (x < 1e6) {
+                return (x / 1000).toFixed(2) + 'k';
+            } else if (x < 1e9) {
+                return (x / 1e6).toFixed(3) + 'M';
+            }
+            return x.toExponential(2);
+        }
+
+        function downloadMwRhCsv() {
+            if (!mwRhResults) return;
+            const lines = ['Peak,D_m2_per_s,D_effective_m2_per_s,R_H_nm,R_H_nm_err,M_W_gmol,M_W_minus_gmol,M_W_plus_gmol,warnings'];
+            mwRhResults.per_peak.forEach(p => {
+                lines.push([
+                    JSON.stringify(p.label),
+                    p.D, p.D_effective,
+                    p.R_H_nm, p.R_H_nm_err || '',
+                    p.M_W_gmol, p.M_W_gmol_err_minus || '', p.M_W_gmol_err_plus || '',
+                    JSON.stringify((p.warnings || []).join(' / '))
+                ].join(','));
+            });
+            lines.push('');
+            lines.push('# Calibration: ' + mwRhResults.calibration.description);
+            const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'mw_rh_results.csv';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        function includeMwInReport(include) {
+            // Pass the MW/Rh results along with the next /download_analysis POST.
+            // We stash it on a global that the fetch payload builder reads.
+            window._includeMwInReport = !!include;
+            const btn = document.getElementById('mw-include-report-btn');
+            if (btn) {
+                if (include) {
+                    btn.innerHTML = '<i class="fas fa-check mr-1"></i> Will be added to Analysis Report';
+                    btn.classList.remove('bg-green-100', 'hover:bg-green-200', 'text-green-800');
+                    btn.classList.add('bg-green-600', 'hover:bg-green-700', 'text-white');
+                } else {
+                    btn.innerHTML = '<i class="fas fa-file-alt mr-1"></i> Add to Analysis Report';
+                    btn.classList.add('bg-green-100', 'hover:bg-green-200', 'text-green-800');
+                    btn.classList.remove('bg-green-600', 'hover:bg-green-700', 'text-white');
+                }
+            }
+        }
+
+        /* ───────────── end of MW/Rh panel ───────────── */
+
         function displayDiffusionResults(data, method) {
             if (!method) method = getSelectedMethod();
             document.getElementById('analysis-results-placeholder').classList.add('hidden');
@@ -2235,6 +2848,10 @@
             _sb.classList.add('bg-blue-600', 'hover:bg-blue-700');
             // Ensure download button is visible (may have been hidden for restored views)
             document.getElementById('btn-download-analysis').classList.remove('hidden');
+
+            // Reveal the Hydrodynamic Radius / Molecular Weight panel and
+            // prime it with the D values from the analysis we just ran.
+            showMwRhPanelAfterAnalysis(data);
         }
 
         function downloadAnalysisData() {
@@ -2279,7 +2896,8 @@
                 gradient_shape_factor: lastAnalysisResult.params?.gradient_shape_factor || 1.0,
                 tau_bipolar: lastAnalysisResult.params?.tau_bipolar || 0.0,
                 raw_ppm: currentNmrData?.raw_ppm || [],
-                raw_spectra: currentNmrData?.raw_spectra || []
+                raw_spectra: currentNmrData?.raw_spectra || [],
+                mw_rh: (window._includeMwInReport && mwRhResults) ? mwRhResults : null
             };
 
             fetch('/download_analysis', {

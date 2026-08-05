@@ -20,6 +20,10 @@ import shutil
 import time
 import re
 
+# Hydrodynamic radius / molecular weight from DOSY diffusion coefficients.
+import mw_rh
+import re
+
 # In-memory store for uploaded NMR datasets, keyed by session UUID.
 # Capped at 10 entries (LRU eviction) to prevent OOM on busy servers.
 from collections import OrderedDict
@@ -741,7 +745,7 @@ def _build_readme(results, params, calibration, vendor, pulse_program,
                   delta, big_delta, ph0, ph1, baseline_order,
                   peaks_ppm, method, detected_standard, calibration_name, lb=1.0, fft_points=None,
                   sequence_type='PGSE', gradient_shape='square', gradient_shape_factor=1.0,
-                  tau_bipolar=0.0, exp_params_full=None):
+                  tau_bipolar=0.0, exp_params_full=None, mw_rh=None):
     """Build a publication-ready README.txt string."""
     ep = exp_params_full or {}
     lines = []
@@ -893,6 +897,45 @@ def _build_readme(results, params, calibration, vendor, pulse_program,
         w("  - ST_X = (γ·g·δ)²·(Δ - δ/3)  where γ = 2.67522×10⁸ rad/s/T (¹H gyromagnetic ratio)")
     w("  - Intensities are normalized to I₀ (first slice, lowest gradient).")
     w("  - Points below 0.5% of I₀ are excluded from the fit (noise floor).")
+
+    # ── Optional: hydrodynamic radius + molecular weight from DOSY ──
+    if mw_rh and mw_rh.get('per_peak'):
+        w("")
+        w("5. HYDRODYNAMIC RADIUS & MOLECULAR WEIGHT (DOSY → R_H, M_W)")
+        w("-" * 78)
+        cal = mw_rh.get('calibration', {}) or {}
+        w(f"  Solvent viscosity at experiment T:   {mw_rh.get('inputs', {}).get('eta_cP', 0):.3f} cP")
+        w(f"  Experiment temperature:              {mw_rh.get('inputs', {}).get('T_K', 0) - 273.15:.1f} °C")
+        w(f"  Calibration:                         {cal.get('description', 'unknown')}")
+        if cal.get('using_universal'):
+            w(f"  Universal-cal. viscosity correction: applied (Ruzicka 2023, eq. 7)")
+        fit = mw_rh.get('fit')
+        if fit:
+            w(f"  Internal fit on standards:           N={fit.get('n')}, "
+              f"log₁₀K={fit.get('log10_K'):.4f}, α={fit.get('alpha'):.4f}, "
+              f"R²={fit.get('r_squared'):.4f}")
+        w("  Equations used:")
+        w("    R_H = k_B T / (6π η D)        Stokes–Einstein")
+        w("    D   = K · M^(-α)              Mark–Houwink / Rouse–Zimm scaling")
+        w("  Refs: Ruzicka et al., Anal. Chem. 95, 7849 (2023); Hou & Pearce, Anal. Chem. 93, 7958 (2021);")
+        w("        Li et al., Macromolecules 45, 9595 (2012); Gong, Hansen, Chen, Macromol. Chem. Phys. 212, 1007 (2011).")
+        w("")
+        w("  Peak                 D (m²/s)        D_eff (m²/s)     R_H (nm)        M_W (g/mol)")
+        w("  -----                --------------- --------------- -------------- ----------------")
+        for p in mw_rh['per_peak']:
+            d_disp    = f"{p.get('D', float('nan')):>8.3e}"
+            d_eff_d   = f"{p.get('D_effective', float('nan')):>8.3e}"
+            rh_disp   = f"{p.get('R_H_nm', float('nan')):>8.3f}"
+            mw_disp   = (f"{p.get('M_W_gmol', float('nan')):>10.3e}"
+                          if p.get('M_W_gmol', 0) > 0 else '   —     ')
+            warn = (' (warnings)' if p.get('warnings') else '')
+            w(f"  {str(p.get('label', '?')):<20} {d_disp:<15} {d_eff_d:<15} {rh_disp:<14} {mw_disp}{warn}")
+        if mw_rh.get('warnings'):
+            w("")
+            w("  Warnings:")
+            for warn in mw_rh['warnings']:
+                w(f"    ⚠ {warn}")
+
     w("")
     w("=" * 78)
     w("  End of report.")
@@ -1082,6 +1125,8 @@ def download_analysis():
         gradient_shape = data.get('gradient_shape', 'square')
         gradient_shape_factor = data.get('gradient_shape_factor', 1.0)
         tau_bipolar = float(data.get('tau_bipolar', 0.0))
+        # Optional: per-peak R_H / M_W results from the new DOSY→R_H, M_W panel.
+        mw_rh_payload = data.get('mw_rh', None)
 
         if not results:
             return jsonify({'error': 'No results to download.'}), 400
@@ -1098,7 +1143,8 @@ def download_analysis():
             delta, big_delta, ph0, ph1, baseline_order,
             peaks_ppm, method, detected_standard, calibration_name, lb, fft_points,
             sequence_type, gradient_shape, gradient_shape_factor,
-            tau_bipolar, exp_params_full
+            tau_bipolar, exp_params_full,
+            mw_rh=mw_rh_payload
         )
 
         # ── Build publication Methods blurb ──
@@ -1111,13 +1157,55 @@ def download_analysis():
         )
 
         # ── Build CSV data for each peak ──
+        # If the user included the optional MW / R_H results, build an
+        # index keyed by ppm so we can attach a single header line and the
+        # corresponding R_H + M_W values to every gradient point in each peak CSV.
+        def _ppm_from_label(label):
+            if isinstance(label, (int, float)):
+                return round(float(label), 3)
+            if isinstance(label, str):
+                # "4.300 ppm"  ->  4.3 ;  "Peak 1" -> None
+                import re as _re
+                m = _re.search(r'(-?\d+(?:\.\d+)?)', label)
+                if m:
+                    try:
+                        return round(float(m.group(1)), 3)
+                    except ValueError:
+                        return None
+            return None
+        mw_by_ppm = {}
+        if mw_rh_payload and mw_rh_payload.get('per_peak'):
+            for p in mw_rh_payload['per_peak']:
+                key = _ppm_from_label(p.get('label', 0) or 0)
+                if key is not None:
+                    mw_by_ppm[key] = p
+
         csv_parts = []
         for r in results:
             csv_lines = []
-            csv_lines.append("Peak_PPM,Intensity_Normalized,Fit_Intensity,Gradient_G_per_cm,ST_X")
+            csv_lines.append(
+                "Peak_PPM,Intensity_Normalized,Fit_Intensity,Gradient_G_per_cm,ST_X"
+                + (",R_H_nm,M_W_gmol" if mw_by_ppm else "")
+            )
+            ppm_key = round(float(r.get('ppm', 0)), 3)
+            mw_peak = mw_by_ppm.get(ppm_key)
+            rh_val    = mw_peak.get('R_H_nm')     if mw_peak else None
+            mw_val    = mw_peak.get('M_W_gmol')   if mw_peak else None
             n = len(r['intensities'])
             for i in range(n):
-                csv_lines.append(f"{r['ppm']},{r['intensities'][i]},{r['fit_intensities'][i]},{r['gradients'][i]},{r['fit_line']['x'][i] if i < len(r['fit_line']['x']) else ''}")
+                base = (
+                    f"{r['ppm']},{r['intensities'][i]},{r['fit_intensities'][i]},"
+                    f"{r['gradients'][i]},"
+                    f"{r['fit_line']['x'][i] if i < len(r['fit_line']['x']) else ''}"
+                )
+                if mw_by_ppm:
+                    csv_lines.append(
+                        base
+                        + (f",{rh_val:.6f}" if rh_val is not None else ",")
+                        + (f",{mw_val:.6e}" if mw_val is not None else ",")
+                    )
+                else:
+                    csv_lines.append(base)
             csv_parts.append((f"peak_{r['ppm']:.3f}.csv", "\n".join(csv_lines)))
 
         # ── Build PPM axis + all raw spectra CSV ──
@@ -2557,6 +2645,60 @@ def restore_data(data_id):
     except Exception as e:
         import traceback; traceback.print_exc()
         return jsonify({'error': str(e)}), 500
+
+
+# ─────────── Hydrodynamic radius / molecular-weight calculations ───────────
+@app.route('/api/mw_rh_calc', methods=['POST'])
+def api_mw_rh_calc():
+    """Convert DOSY diffusion coefficients into hydrodynamic radii and
+    polymer molecular weights via Stokes–Einstein + Mark–Houwink.
+
+    The request payload and response format are documented in mw_rh.py; see
+    ``mw_rh.calculate()``.  Validation is performed inside mw_rh so the
+    endpoint stays thin.
+    """
+    try:
+        payload = request.get_json(silent=True) or {}
+        result = mw_rh.calculate(payload)
+        return jsonify(result)
+    except ValueError as e:
+        return jsonify({'ok': False, 'error': str(e)}), 400
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({'ok': False, 'error': f'Internal error: {e}'}), 500
+
+
+@app.route('/api/mw_rh_library', methods=['GET'])
+def api_mw_rh_library():
+    """Expose the polymer-calibration library and solvent-viscosity table
+    to the front-end so the dropdowns can be populated without hard-coding
+    numbers in JS.
+    """
+    return jsonify({
+        'polymers': [
+            {
+                'name':       c.name,
+                'polymer':    c.polymer,
+                'solvent':    c.solvent,
+                'K':          c.K,
+                'log10_K':    c.log10_K,
+                'alpha':      c.alpha,
+                'T_C':        c.T_C,
+                'source':     c.source,
+            }
+            for c in mw_rh.POLYMER_CALIBRATIONS
+        ],
+        'solvents': [
+            {'name': k, 'viscosity_cP': v}
+            for k, v in mw_rh.SOLVENT_VISCOSITY_CP.items()
+            if v is not None
+        ],
+        'constants': {
+            'k_B':        mw_rh.K_B,
+            'N_A':        mw_rh.N_A,
+            'T_room_C':   25.0,
+        },
+    })
 
 
 @app.route('/session/save_analysis', methods=['POST'])
