@@ -1127,6 +1127,10 @@ def download_analysis():
         tau_bipolar = float(data.get('tau_bipolar', 0.0))
         # Optional: per-peak R_H / M_W results from the new DOSY→R_H, M_W panel.
         mw_rh_payload = data.get('mw_rh', None)
+        if mw_rh_payload:
+            print(f"[download_analysis] MW/RH payload received: {len(mw_rh_payload.get('per_peak', []))} peaks, calibration={mw_rh_payload.get('calibration', {}).get('description', 'unknown')[:60]}")
+        else:
+            print("[download_analysis] No MW/RH payload in download request")
 
         if not results:
             return jsonify({'error': 'No results to download.'}), 400
@@ -1343,6 +1347,63 @@ def download_analysis():
                 zf.writestr(fname, content)
             for fname, img_data in plot_images.items():
                 zf.writestr(f"plots/{fname}", img_data)
+
+            # ── MW / R_H dedicated folder ──
+            if mw_rh_payload and mw_rh_payload.get('per_peak'):
+                mw_csv = ["Peak,D_m2_per_s,D_effective_m2_per_s,R_H_nm,R_H_nm_err,M_W_gmol,M_W_gmol_err_minus,M_W_gmol_err_plus,warnings"]
+                for p in mw_rh_payload['per_peak']:
+                    mw_csv.append(",".join([
+                        f'"{p.get("label", "")}"',
+                        str(p.get('D', '')),
+                        str(p.get('D_effective', '')),
+                        str(p.get('R_H_nm', '')),
+                        str(p.get('R_H_nm_err', '') or ''),
+                        str(p.get('M_W_gmol', '')),
+                        str(p.get('M_W_gmol_err_minus', '') or ''),
+                        str(p.get('M_W_gmol_err_plus', '') or ''),
+                        f'"{"; ".join(p.get("warnings", []))}"',
+                    ]))
+                zf.writestr("mw_rh/mw_rh_results.csv", "\n".join(mw_csv))
+
+                cal = mw_rh_payload.get('calibration', {}) or {}
+                mw_txt = []
+                mw_txt.append("=" * 78)
+                mw_txt.append("  HYDRODYNAMIC RADIUS & MOLECULAR WEIGHT — DETAILED RESULTS")
+                mw_txt.append("=" * 78)
+                mw_txt.append("")
+                mw_txt.append(f"Calibration:       {cal.get('description', 'unknown')}")
+                mw_txt.append(f"K:                 {cal.get('K', 'N/A')}")
+                mw_txt.append(f"α (alpha):        {cal.get('alpha', 'N/A')}")
+                if cal.get('using_universal'):
+                    mw_txt.append(f"Universal cal:     viscosity correction applied")
+                    mw_txt.append(f"  T_ref:           {cal.get('T_ref_K', 'N/A')} K")
+                    mw_txt.append(f"η_ref:           {cal.get('eta_ref_cP', 'N/A')} cP")
+                fit = mw_rh_payload.get('fit')
+                if fit:
+                    mw_txt.append("")
+                    mw_txt.append(f"Internal fit on {fit.get('n')} standards:")
+                    mw_txt.append(f"  log10(K):        {fit.get('log10_K', 'N/A')}")
+                    mw_txt.append(f"  α:              {fit.get('alpha', 'N/A')}")
+                    mw_txt.append(f"  R²:              {fit.get('r_squared', 'N/A')}")
+                mw_txt.append("")
+                mw_txt.append(f"Experiment T:      {mw_rh_payload.get('inputs', {}).get('T_K', 0) - 273.15:.1f} °C")
+                mw_txt.append(f"Solvent η:         {mw_rh_payload.get('inputs', {}).get('eta_cP', 0):.3f} cP")
+                mw_txt.append("")
+                mw_txt.append("Equations:")
+                mw_txt.append("  R_H = k_B T / (6π η D)        Stokes–Einstein")
+                mw_txt.append("  D   = K · M^(-α)              Mark–Houwink / Rouse–Zimm scaling")
+                mw_txt.append("")
+                mw_txt.append("References:")
+                mw_txt.append("  Ruzicka et al., Anal. Chem. 95, 7849 (2023)")
+                mw_txt.append("  Hou & Pearce, Anal. Chem. 93, 7958 (2021)")
+                mw_txt.append("  Li et al., Macromolecules 45, 9595 (2012)")
+                mw_txt.append("  Gong, Hansen, Chen, Macromol. Chem. Phys. 212, 1007 (2011)")
+                mw_txt.append("")
+                mw_txt.append("=" * 78)
+                mw_txt.append("  End of MW/RH summary.")
+                mw_txt.append("=" * 78)
+                zf.writestr("mw_rh/mw_rh_summary.txt", "\n".join(mw_txt))
+                print(f"[download_analysis] Wrote mw_rh/mw_rh_results.csv and mw_rh/mw_rh_summary.txt to ZIP")
 
         zip_buffer.seek(0)
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
