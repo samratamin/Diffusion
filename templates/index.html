@@ -700,14 +700,14 @@
                                                     </table>
                                                 </div>
                                                 <div id="mw-warnings" class="hidden text-amber-700 text-xs p-3 bg-amber-50 rounded-lg border border-amber-200 space-y-1"></div>
-                                                <div class="flex gap-2">
-                                                    <button onclick="downloadMwRhCsv()" class="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-700 py-2 rounded-xl text-xs font-bold uppercase tracking-wider transition-all">
+                                                <div class="flex items-center justify-between gap-3 pt-1">
+                                                    <button onclick="downloadMwRhCsv()" class="bg-gray-100 hover:bg-gray-200 text-gray-700 py-2 px-4 rounded-xl text-xs font-bold uppercase tracking-wider transition-all">
                                                         <i class="fas fa-download mr-1"></i> Download CSV
                                                     </button>
-                                                    <button onclick="includeMwInReport(true)" id="mw-include-report-btn"
-                                                            class="flex-1 bg-green-100 hover:bg-green-200 text-green-800 py-2 rounded-xl text-xs font-bold uppercase tracking-wider transition-all">
-                                                        <i class="fas fa-file-alt mr-1"></i> Add to Analysis Report
-                                                    </button>
+                                                    <label class="flex items-center gap-2 cursor-pointer select-none">
+                                                        <input type="checkbox" id="mw-include-report-check" onchange="onIncludeMwReportChange()" class="w-4 h-4 rounded text-green-600 focus:ring-green-500">
+                                                        <span class="text-xs font-bold text-gray-600 uppercase tracking-wider">Include in Analysis Report</span>
+                                                    </label>
                                                 </div>
                                             </div>
                                         </div>
@@ -2342,6 +2342,9 @@
             const errEl = document.getElementById('mw-error');
             errEl.classList.add('hidden');
             errEl.textContent = '';
+            // Uncheck the "Include in Report" box since results are stale
+            const cb = document.getElementById('mw-include-report-check');
+            if (cb) cb.checked = false;
         }
 
         async function ensureMwRhLibraryFresh() {
@@ -2709,21 +2712,18 @@
             URL.revokeObjectURL(url);
         }
 
-        function includeMwInReport(include) {
-            // Pass the MW/Rh results along with the next /download_analysis POST.
-            // We stash it on a global that the fetch payload builder reads.
-            window._includeMwInReport = !!include;
-            const btn = document.getElementById('mw-include-report-btn');
-            if (btn) {
-                if (include) {
-                    btn.innerHTML = '<i class="fas fa-check mr-1"></i> Will be added to Analysis Report';
-                    btn.classList.remove('bg-green-100', 'hover:bg-green-200', 'text-green-800');
-                    btn.classList.add('bg-green-600', 'hover:bg-green-700', 'text-white');
-                } else {
-                    btn.innerHTML = '<i class="fas fa-file-alt mr-1"></i> Add to Analysis Report';
-                    btn.classList.add('bg-green-100', 'hover:bg-green-200', 'text-green-800');
-                    btn.classList.remove('bg-green-600', 'hover:bg-green-700', 'text-white');
-                }
+        function onIncludeMwReportChange() {
+            // Checkbox-driven: no visual button swapping needed.
+            // The download payload builder reads the checkbox state directly.
+            const cb = document.getElementById('mw-include-report-check');
+            if (cb && cb.checked && !mwRhResults) {
+                // User wants MW in the report but hasn't calculated yet.
+                // Hint them to click Calculate first.
+                showMwError('Check the "Include in Analysis Report" box AFTER clicking Calculate — no MW/R_H results to include yet.');
+                // Uncheck so the state is honest
+                cb.checked = false;
+            } else {
+                hideMwError();
             }
         }
 
@@ -2897,7 +2897,11 @@
                 tau_bipolar: lastAnalysisResult.params?.tau_bipolar || 0.0,
                 raw_ppm: currentNmrData?.raw_ppm || [],
                 raw_spectra: currentNmrData?.raw_spectra || [],
-                mw_rh: (window._includeMwInReport && mwRhResults) ? mwRhResults : null
+                mw_rh: (() => {
+                    const cb = document.getElementById('mw-include-report-check');
+                    if (cb && cb.checked && mwRhResults) return mwRhResults;
+                    return null;
+                })()
             };
 
             fetch('/download_analysis', {

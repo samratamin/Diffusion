@@ -1311,60 +1311,6 @@ def download_analysis():
         buf.seek(0)
         plot_images['decay_fit_ui_matched.png'] = buf.getvalue()
 
-        # ── Plot 3: Angled stacked spectra (processed/phased data) ──
-        if ppm_array and raw_spectra:
-            fig, ax = plt.subplots(figsize=(9, 5.5), dpi=150)
-            ppm_np = np.array(ppm_array, dtype=float)
-            first_slice = np.array(raw_spectra[0], dtype=float)
-            norm_factor = float(np.max(np.abs(first_slice))) if len(first_slice) else 1.0
-            if norm_factor == 0:
-                norm_factor = 1.0
-
-            for i, sp in enumerate(raw_spectra):
-                sp_np = np.array(sp, dtype=float)
-                if len(sp_np) != len(ppm_np):
-                    continue
-                y_offset = i * 0.05
-                x_shift = i * 0.1
-                x_plot = ppm_np - x_shift
-                y_plot = (sp_np / norm_factor) + y_offset
-                ax.plot(x_plot, y_plot, linewidth=1.1, color=colors[i % len(colors)], alpha=0.9)
-
-            ax.set_xlabel('Chemical Shift (ppm)', fontsize=11, fontweight='bold')
-            ax.set_ylabel('Normalized Intensity + Offset', fontsize=11, fontweight='bold')
-            ax.set_title('Angled Stacked Spectra (Processed/Phased)', fontsize=12, fontweight='bold', pad=10)
-            ax.invert_xaxis()
-            ax.grid(True, alpha=0.2)
-            ax.tick_params(axis='both', which='major', labelsize=9)
-            plt.tight_layout()
-            buf = Bio()
-            fig.savefig(buf, format='png', bbox_inches='tight')
-            plt.close(fig)
-            plot_images['stacked_spectra_angled.png'] = buf.getvalue()
-
-        # ── Plot 4: Results summary bar chart (D values with error bars) ──
-        if results:
-            d_vals = [r['d_value'] for r in results]
-            ppm_labels = [f"{r['ppm']:.2f}" for r in results]
-            errors = [abs(r['d_value'] * r['error_pct']) for r in results]
-            fig, ax = plt.subplots(figsize=(8, 4), dpi=150)
-            x_pos = range(len(d_vals))
-            bars = ax.bar(x_pos, d_vals, yerr=errors, capsize=4,
-                          color=[colors[i % len(colors)] for i in range(len(d_vals))],
-                          alpha=0.8, edgecolor='black', linewidth=0.5)
-            ax.set_xlabel('Peak Position (ppm)', fontsize=11, fontweight='bold')
-            ax.set_ylabel('Diffusion Coefficient D (m²/s)', fontsize=11, fontweight='bold')
-            ax.set_title('Diffusion Coefficients by Peak', fontsize=12, fontweight='bold', pad=10)
-            ax.set_xticks(list(x_pos))
-            ax.set_xticklabels(ppm_labels, fontsize=9)
-            ax.grid(True, alpha=0.3, axis='y')
-            ax.tick_params(axis='x', rotation=45)
-            plt.tight_layout()
-            buf = Bio()
-            fig.savefig(buf, format='png', bbox_inches='tight')
-            plt.close(fig)
-            plot_images['diffusion_coefficients.png'] = buf.getvalue()
-
         # ── Plot 5: Calibration curve (if calibration data available) ──
         if calibration and calibration.get('slope') is not None:
             fig, ax = plt.subplots(figsize=(8, 5.5), dpi=150)
